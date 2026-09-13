@@ -158,6 +158,8 @@ async function probeNoCorsReachability(url: string, timeoutMs = 8000): Promise<'
     const response = await fetch(url, {
       method: 'GET',
       mode: 'no-cors',
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
       cache: 'no-store',
       signal: controller.signal,
     })
@@ -169,13 +171,33 @@ async function probeNoCorsReachability(url: string, timeoutMs = 8000): Promise<'
   }
 }
 
+export class ImageDownloadError extends Error {
+  readonly rawImageUrls: string[]
+  constructor(url: string, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause))
+    this.name = 'ImageDownloadError'
+    this.rawImageUrls = [url]
+  }
+}
+
 export async function fetchImageUrlAsDataUrl(url: string, fallbackMime: string, signal?: AbortSignal): Promise<string> {
+  try {
+    return await downloadImageUrlAsDataUrl(url, fallbackMime, signal)
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ImageDownloadError(url, error)
+  }
+}
+
+async function downloadImageUrlAsDataUrl(url: string, fallbackMime: string, signal?: AbortSignal): Promise<string> {
   if (isDataUrl(url)) return url
 
   let response: Response
   try {
     response = await fetch(url, {
       cache: 'no-store',
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
       signal,
     })
   } catch (err) {

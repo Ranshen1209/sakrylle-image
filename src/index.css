@@ -707,3 +707,16 @@ html.theme-toggling, html.theme-toggling * { transition: none !important; }
   font-size: inherit;
   vertical-align: baseline;
 }
+
+/* Backdrop-filter isolates each card. Lift the whole open selector card so its
+   menu can overlap adjacent cards, including menus that open upwards. */
+.settings-api-content .glass-card:has([data-select-open="true"]) {
+  position: relative;
+  z-index: 10;
+}
+.settings-api-content [data-select-open] > .glass-panel {
+  background-color: rgb(250 248 255 / 98%);
+}
+.dark .settings-api-content [data-select-open] > .glass-panel {
+  background-color: rgb(35 32 43 / 98%);
+}

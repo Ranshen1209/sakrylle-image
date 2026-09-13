@@ -1,3 +1,4 @@
+import { ImageDownloadError } from './imageApiShared'
 import { describe, it, expect, vi } from 'vitest'
 import { runImageRequestsWithRefill, buildPartialFailure, callWithRetry } from './openaiCompatibleImageApi'
 
@@ -46,4 +47,24 @@ describe('Sakrylle paid request limits', () => {
       expect(buildPartialFailure(result.failedCount, result.firstError)).toEqual({ failedCount: 1, firstErrorMessage: 'busy' })
     } finally { vi.useRealTimers() }
   })
+})
+
+it('never refills a paid result whose download failed when other slots succeed', async () => {
+  const failure = new ImageDownloadError('https://images.example/test.png', new TypeError('fetch failed'))
+  const run = vi.fn().mockResolvedValueOnce({ images: ['saved'] }).mockRejectedValueOnce(failure)
+  const result = await runImageRequestsWithRefill(2, () => callWithRetry(run))
+  expect(run).toHaveBeenCalledTimes(2)
+  expect(result.failedCount).toBe(1)
+  expect(result.firstError).toBe(failure)
+  expect(result.resultsBySlot[0]?.images).toEqual(['saved'])
+})
+
+it('retains all result links when multiple paid downloads fail', async () => {
+  const urls = ['https://images.example/1.png', 'https://images.example/2.png']
+  const result = await runImageRequestsWithRefill(2, async slot => {
+    throw new ImageDownloadError(urls[slot], new Error('download failed'))
+  })
+  expect(result.failedImageUrls).toEqual(urls)
+  expect(result.firstError).toMatchObject({ rawImageUrls: urls })
+  expect(result.failedCount).toBe(2)
 })

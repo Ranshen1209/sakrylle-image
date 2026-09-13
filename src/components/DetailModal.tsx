@@ -1,3 +1,6 @@
+import { resolveErrorForDisplay } from '../lib/agentSentinels'
+import { isHttpUrl } from '../lib/imageApiShared'
+import RemoteImageResults from './RemoteImageResults'
 import i18n from '../lib/i18n'
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
@@ -265,6 +268,7 @@ export default function DetailModal() {
   const showSourceInfo = Boolean(task.apiProvider || task.apiProfileName || task.apiModel)
   const isCustomReconnecting = false
   const rawImageUrls = task.rawImageUrls ?? []
+  const canRetryDownload = rawImageUrls.some(isHttpUrl) && !task.outputImages.length
   const streamPreviewLen = streamPreviewItems.length
   const currentStreamPreviewSrc = activeStreamPreviewSrc
   const streamPartialImageIds = task.streamPartialImageIds ?? []
@@ -434,7 +438,7 @@ export default function DetailModal() {
 
   const handleRetry = () => {
     retryTask(task)
-    setDetailTaskId(null)
+    if (!canRetryDownload) setDetailTaskId(null)
   }
 
   return (
@@ -717,8 +721,9 @@ export default function DetailModal() {
                   WebkitLineClamp: 10,
                 }}
               >
-                {task.error || '生成失败'}
+                {resolveErrorForDisplay(task.error, i18n.t('errors.noImagePayload'))}
               </p>
+              <RemoteImageResults urls={rawImageUrls} />
               <div className="mt-3 flex items-center justify-center gap-2">
                 <div className="relative group">
                   <button
@@ -813,14 +818,14 @@ export default function DetailModal() {
                       handleRetry()
                     }}
                     className="inline-flex items-center justify-center rounded-full border border-[#d4c5ec]/80 bg-white/80 px-3 py-1.5 text-[#9181bd] transition hover:bg-[#f1edf8] dark:border-[#a28fc9]/20 dark:bg-white/[0.04] dark:hover:bg-[#9181bd]/10"
-                    aria-label={i18n.t("detail.retry")}
+                    aria-label={i18n.t(canRetryDownload ? 'detail.retryDownload' : 'detail.retry')}
                   >
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
                   </button>
                   <ViewportTooltip visible={retryTooltip.visible} className="whitespace-nowrap">
-                    {i18n.t("detail.retry")}
+                    {i18n.t(canRetryDownload ? 'detail.retryDownload' : 'detail.retry')}
                   </ViewportTooltip>
                 </div>
               </div>

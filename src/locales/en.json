@@ -418,7 +418,13 @@
     "copyAll": "Copy all",
     "copy": "Copy",
     "copyLink": "Copy link",
-    "rawResponseTitle": "Raw response data"
+    "rawResponseTitle": "Raw response data",
+    "remotePreview": "Remote preview (not saved locally)",
+    "openOriginal": "Open original image",
+    "retryDownload": "Retry download (no regeneration)",
+    "recoveringDownloads": "Downloading existing images without regenerating.",
+    "downloadRecoveryFailed": "The image still cannot be downloaded. Open the original to save it; contact the provider if the link expired.",
+    "remoteUnavailable": "Remote preview unavailable. Try opening the original image."
   },
   "mask": {
     "canvasUnsupported": "Canvas is not supported in this browser",

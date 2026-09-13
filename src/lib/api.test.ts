@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
-import { createDefaultOpenAIProfile, DEFAULT_IMAGES_MODEL, DEFAULT_SETTINGS } from './apiProfiles'
+import { createDefaultOpenAIProfile, mergePresetImportedSettings, normalizeSettings, DEFAULT_IMAGES_MODEL, DEFAULT_SETTINGS } from './apiProfiles'
 import { normalizePersistedState } from './persistedState'
 import { callImageApi } from './api'
 import { maybeAppendStreamingHint } from './imageApiShared'
@@ -1803,4 +1803,20 @@ describe('callImageApi', () => {
       images: ['data:image/png;base64,aW1hZ2U='],
     })
   })
+})
+
+
+it('sends the persisted Base64 choice after a production preset refresh and prefers bytes over a CORS URL', async () => {
+  const preset = { profiles: [createDefaultOpenAIProfile({ isDefault: true })] }
+  const initial = mergePresetImportedSettings(DEFAULT_SETTINGS, preset)
+  const saved = normalizeSettings({ ...initial.settings, profiles: initial.settings.profiles.map(p => ({ ...p, responseFormatB64Json: true })) })
+  const restored = mergePresetImportedSettings(JSON.parse(JSON.stringify(saved)), preset, { previousPresetConfig: initial.presetConfig }).settings
+  const settings = normalizeSettings({ ...restored, profiles: restored.profiles.map(p => ({ ...p, apiKey: 'test-key', streamImages: false, streamChatCompletionsImage: false })) })
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=', url: 'https://images.example/no-cors.png' }] }), { headers: { 'Content-Type': 'application/json' } }))
+  try {
+    const result = await callImageApi({ settings, prompt: 'test', params: { ...DEFAULT_PARAMS, n: 1 }, inputImageDataUrls: [] })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ response_format: 'b64_json' })
+    expect(result.images).toEqual(['data:image/png;base64,aW1hZ2U='])
+  } finally { fetchMock.mockRestore() }
 })

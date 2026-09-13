@@ -1639,3 +1639,22 @@ it('preserves an explicit false', () => {
     expect(normalized.streamChatCompletionsImage).toBe(false)
   })
 })
+
+describe('refresh with production defaults preserves user options', () => {
+  it.each([
+    { responseFormatB64Json: true },
+    { streamChatCompletionsImage: false },
+    { responsesModel: 'gpt-5.4' },
+    { streamImages: false },
+    { codexCli: true },
+    { streamPartialImages: 2 },
+    { timeout: 300 },
+    { transparentBackgroundMethod: 'local' as const },
+  ])('does not treat customized defaults as pristine: %j', patch => {
+    const preset = { profiles: [createDefaultOpenAIProfile({ isDefault: true })] }
+    const initial = mergeDefaultImportedSettings(DEFAULT_SETTINGS, preset)
+    const saved = normalizeSettings({ ...initial.settings, profiles: initial.settings.profiles.map(p => ({ ...p, ...patch })) })
+    const restored = mergeDefaultImportedSettings(JSON.parse(JSON.stringify(saved)), preset, { previousPresetConfig: initial.presetConfig })
+    expect(restored.settings.profiles.find(p => p.id === saved.activeProfileId)).toMatchObject(patch)
+  })
+})

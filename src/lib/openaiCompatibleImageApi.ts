@@ -10,6 +10,7 @@ import {
   type CallApiOptions,
   type CallApiResult,
   fetchImageUrlAsDataUrl,
+  ImageDownloadError,
   getApiErrorMessage,
   getDataUrlDecodedByteSize,
   getDataUrlEncodedByteSize,
@@ -146,6 +147,7 @@ export async function runWithConcurrency<T>(
 
 /** 判定错误是否值得重试：空闲超时可重试，整体超时和用户取消不可重试 */
 export function isRetryableError(err: unknown): boolean {
+  if (err instanceof ImageDownloadError) return false
   // 空闲超时:上游卡死,重试可能换账号成功 → 可重试
   if (err instanceof Error && err.name === 'IdleTimeout') return true
   // 整体超时:有字节流动但到 600s,真太慢,重试只是再烧时间和钱 → 不可重试
@@ -226,16 +228,18 @@ async function makeApiError(response: Response, streamImages?: boolean): Promise
 export async function runImageRequestsWithRefill(
   n: number,
   runSingle: (slot: number) => Promise<CallApiResult>,
-): Promise<{ resultsBySlot: Array<CallApiResult | undefined>; failedCount: number; firstError: unknown }> {
+): Promise<{ resultsBySlot: Array<CallApiResult | undefined>; failedCount: number; firstError: unknown; failedImageUrls: string[] }> {
   const resultsBySlot = new Array<CallApiResult | undefined>(n).fill(undefined)
   const maxAttempts = n + n * IMAGE_REQUEST_REFILL_BUDGET_FACTOR
   let attempts = 0
+  const downloadFailedSlots = new Set<number>()
+  const failedImageUrls = new Set<string>()
   let firstError: unknown
 
   while (attempts < maxAttempts) {
     const unfilledSlots: number[] = []
     for (let slot = 0; slot < n; slot++) {
-      if (!resultsBySlot[slot]) unfilledSlots.push(slot)
+      if (!resultsBySlot[slot] && !downloadFailedSlots.has(slot)) unfilledSlots.push(slot)
     }
     if (unfilledSlots.length === 0) break
 
@@ -254,6 +258,10 @@ export async function runImageRequestsWithRefill(
         resultsBySlot[batchSlots[idx]] = r.value
         roundSuccess++
       } else {
+        if (r.reason instanceof ImageDownloadError) {
+          downloadFailedSlots.add(batchSlots[idx])
+          r.reason.rawImageUrls.forEach((url: string) => failedImageUrls.add(url))
+        }
         if (firstError === undefined) firstError = r.reason
         // 503 账号池枯竭秒回,补发也是空转烧钱 → 不计入可重试
         if (isRetryableError(r.reason) && !isAccountPoolExhausted(r.reason)) roundRetryable++
@@ -264,7 +272,10 @@ export async function runImageRequestsWithRefill(
     if (roundSuccess === 0 && roundRetryable === 0) break
   }
 
-  return { resultsBySlot, failedCount: resultsBySlot.filter((r) => !r).length, firstError }
+  if (firstError instanceof Error && failedImageUrls.size) {
+    Object.assign(firstError, { rawImageUrls: [...failedImageUrls] })
+  }
+  return { resultsBySlot, failedCount: resultsBySlot.filter((r) => !r).length, firstError, failedImageUrls: [...failedImageUrls] }
 }
 
 
@@ -701,7 +712,7 @@ async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile
   }
 
   // Sakrylle streaming split: runImageRequestsWithRefill with retry/refill, returns partialFailure
-  const { resultsBySlot, failedCount, firstError } = await runImageRequestsWithRefill(n, (slot) =>
+  const { resultsBySlot, failedCount, firstError, failedImageUrls } = await runImageRequestsWithRefill(n, (slot) =>
     callWithRetry(() => callImagesApiSingle({
       ...singleOpts,
       onPartialImage: opts.onPartialImage
@@ -729,7 +740,7 @@ async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile
   const revisedPrompts = successfulResults.flatMap((r) =>
     r.revisedPrompts?.length ? r.revisedPrompts : r.images.map(() => undefined),
   )
-  const rawImageUrls = successfulResults.flatMap((r) => r.rawImageUrls ?? [])
+  const rawImageUrls = [...successfulResults.flatMap((r) => r.rawImageUrls ?? []), ...failedImageUrls]
   const actualParams = mergeActualParams(
     successfulResults[0]?.actualParams ?? {},
     { n: images.length },

@@ -17,6 +17,6 @@ docker exec "$container" sh -eu -c '
   grep -R -q "https://api.sakrylle.com/v1" /usr/share/nginx/html/assets
   grep -R -q "https://oidc1.sakrylle.com" /usr/share/nginx/html/assets
   ! grep -q "proxy_pass" /etc/nginx/conf.d/default.conf
-  grep -q "sakrylle-image-playground-v0.12.2" /usr/share/nginx/html/sw.js
+  grep -q "sakrylle-image-playground-v0.12.3" /usr/share/nginx/html/sw.js
 '
 echo 'Docker runtime smoke test passed (direct API, OAuth/OIDC, placeholders, SW).'

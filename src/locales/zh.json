@@ -418,7 +418,13 @@
     "copyAll": "全部复制",
     "copy": "复制",
     "copyLink": "复制链接",
-    "rawResponseTitle": "原始响应数据"
+    "rawResponseTitle": "原始响应数据",
+    "remotePreview": "远程图片预览（尚未保存到本地）",
+    "openOriginal": "打开原图",
+    "retryDownload": "重新下载（不会重新生成）",
+    "recoveringDownloads": "正在下载已有图片，不会重新生成。",
+    "downloadRecoveryFailed": "图片仍无法下载。可打开原图保存；链接失效时请联系服务商。",
+    "remoteUnavailable": "无法显示远程预览，请尝试打开原图。"
   },
   "mask": {
     "canvasUnsupported": "当前浏览器不支持 Canvas",

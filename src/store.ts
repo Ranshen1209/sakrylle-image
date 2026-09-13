@@ -51,7 +51,7 @@ import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSin
 import { buildAgentApiInput, buildAgentContinuationInput } from './lib/agentInputBuilder'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId } from './lib/agentImageReferences'
 import { showBrowserNotification } from './lib/browserNotification'
-import { getImageFetchCorsHint, mergeActualParams, messageContainsImageFetchCorsHint } from './lib/imageApiShared'
+import { fetchImageUrlAsDataUrl, isHttpUrl, MIME_MAP, getImageFetchCorsHint, mergeActualParams, messageContainsImageFetchCorsHint } from './lib/imageApiShared'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import {
   SENTINEL_AGENT_STOPPED,
@@ -3948,8 +3948,46 @@ export async function deleteFavoriteCollection(collectionId: string, deleteTasks
   useStore.getState().showToast(i18n.t('upstreamSync.message59', { value0: collection.name }), 'success')
 }
 
-/** 重试失败的任务：创建新任务并执行 */
+const recoveringImageDownloads = new Set<string>()
+
+/** Recover existing paid results. Never submit a generation request here. */
+export async function retryImageDownloads(task: TaskRecord) {
+  if (recoveringImageDownloads.has(task.id)) return
+  const latest = useStore.getState().tasks.find(item => item.id === task.id)
+  if (!latest || latest.status !== 'error' || latest.outputImages.length) return
+  const urls = [...new Set(latest.rawImageUrls?.filter(isHttpUrl) ?? [])]
+  if (!urls.length) return
+  recoveringImageDownloads.add(task.id)
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 60_000)
+  try {
+    useStore.getState().showToast(i18n.t('detail.recoveringDownloads'), 'success')
+    const images: string[] = []
+    for (const url of urls) images.push(await fetchImageUrlAsDataUrl(url, MIME_MAP[task.params.output_format] || 'image/png', controller.signal))
+    if (useStore.getState().tasks.find(item => item.id === task.id)?.status !== 'error') return
+    const { outputIds, transparentOriginalImageIds } = await storeTaskOutputImages(latest, images)
+    if (useStore.getState().tasks.find(item => item.id === task.id)?.status !== 'error') {
+      await deleteUnreferencedImageIds([...outputIds, ...(transparentOriginalImageIds ?? [])])
+      return
+    }
+    updateTaskInStore(task.id, { outputImages: outputIds, transparentOriginalImages: transparentOriginalImageIds, status: 'done', error: null })
+    useStore.getState().showToast(i18n.t('toast.generationCompleteWithCount', { count: outputIds.length }), 'success')
+  } catch {
+    // Keep the original task and URLs available even when the link has expired.
+    useStore.getState().showToast(i18n.t('detail.downloadRecoveryFailed'), 'error')
+  } finally {
+    clearTimeout(timeout)
+    recoveringImageDownloads.delete(task.id)
+  }
+}
+
+/** Retry saved downloads when available; otherwise create a new generation task. */
 export async function retryTask(task: TaskRecord) {
+  if (task.status === 'error' && task.rawImageUrls?.some(isHttpUrl) && !task.outputImages.length) {
+    await retryImageDownloads(task)
+    return
+  }
+
   const { settings, showToast } = useStore.getState()
   const normalizedSettings = normalizeSettings(settings)
   const preferredProfile = getTaskApiProfile(normalizedSettings, task) ?? getActiveApiProfile(settings)

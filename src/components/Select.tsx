@@ -180,7 +180,7 @@ export default function Select({ value, onChange, onReorder, options, disabled, 
   }
 
   return (
-    <div ref={containerRef} className="relative w-full">
+    <div ref={containerRef} className="relative w-full" data-select-open={isOpen || undefined}>
       <div
         ref={triggerRef}
         {...(showValueTooltips ? triggerTooltip.handlers : {})}

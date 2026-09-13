@@ -875,6 +875,11 @@ function isDefaultOpenAIProfile(profile: ApiProfile): boolean {
     profile.codexCli === false &&
     profile.apiProxy === DEFAULT_OPENAI_API_PROXY &&
     profile.streamImages === true &&
+    profile.responseFormatB64Json !== true &&
+    profile.streamChatCompletionsImage !== false &&
+    profile.responsesModel === DEFAULT_RESPONSES_MODEL &&
+    !profile.providerDrafts &&
+    !profile.description &&
     profile.streamPartialImages === DEFAULT_STREAM_PARTIAL_IMAGES &&
     !profile.imageProfileId && profile.transparentBackgroundMethod === 'api'
 }
@@ -1146,7 +1151,7 @@ export function mergePresetImportedSettings(
   const sourceDefaultProfileId = allSourceProfileEntries.length === 1
     ? allSourceProfileEntries[0].profile.id
     : allSourceProfileEntries.find((entry) => entry.isDefault)?.profile.id ?? null
-  const replacingPristineDefault = sourceProfiles.length > 0 && hasOnlyDefaultProfiles(current)
+  const replacingPristineDefault = !options.previousPresetConfig && sourceProfiles.length > 0 && hasOnlyDefaultProfiles(current)
   const currentProvidersById = new Map(current.customProviders.map((provider) => [provider.id, provider]))
   const previousProfilesById = new Map(options.previousPresetConfig?.profiles.map((profile) => [profile.id, profile]) ?? [])
   const previousProvidersById = new Map(options.previousPresetConfig?.customProviders.map((provider) => [provider.id, provider]) ?? [])

@@ -128,7 +128,7 @@ import { clearAgentConversations, clearImages, clearTasks, commitTaskDeletion, d
 import { callImageApi } from './lib/api'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { retryTask, clearData, clearFailedTasks, deleteFavoriteCollection, editOutputs, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, restoreExplicitPresetConfig, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 
 const commitTaskDeletionImplementation = vi.mocked(commitTaskDeletion).getMockImplementation()!
 const deleteDbImageImplementation = vi.mocked(deleteDbImage).getMockImplementation()!
@@ -4710,5 +4710,44 @@ describe('reused task API profile', () => {
       cancelText: '放弃提交',
     }))
     expect(state.showSettings).toBe(false)
+  })
+})
+
+
+describe('existing image download recovery', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('retries only stored image URLs and keeps failed history intact without a generation call', async () => {
+    const old = task({ status: 'error', error: 'old download failure', rawImageUrls: ['https://images.example/result.png'] })
+    useStore.setState({ tasks: [old] })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('expired', { status: 403 }))
+    await retryTask(old)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toBe(old.rawImageUrls![0])
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'omit', referrerPolicy: 'no-referrer' })
+    expect(useStore.getState().tasks).toEqual([old])
+  })
+  it('saves a successfully downloaded result into the same history task', async () => {
+    const old = task({ status: 'error', error: 'download failed', rawImageUrls: ['https://images.example/result.png'] })
+    useStore.setState({ tasks: [old] })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new Blob(['image'], { type: 'image/png' })))
+    await retryTask(old)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const restored = useStore.getState().tasks
+    expect(restored).toHaveLength(1)
+    expect(restored[0]).toMatchObject({ id: old.id, status: 'done', error: null, rawImageUrls: old.rawImageUrls, createdAt: old.createdAt })
+    expect(restored[0].outputImages).toHaveLength(1)
+  })
+  it('deduplicates rapid recovery clicks and does not recreate a deleted task', async () => {
+    const old = task({ status: 'error', rawImageUrls: ['https://images.example/result.png'] })
+    useStore.setState({ tasks: [old] })
+    const response = deferred<Response>()
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockReturnValue(response.promise)
+    const pending = retryTask(old)
+    await retryTask(old)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    useStore.setState({ tasks: [] })
+    response.resolve(new Response('expired', { status: 403 }))
+    await pending
+    expect(useStore.getState().tasks).toEqual([])
   })
 })
