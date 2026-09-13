@@ -1,3 +1,4 @@
+import { flushSync } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '../store'
@@ -10,7 +11,7 @@ import { useFavoriteCollectionTitle } from './FavoriteCollections'
 import { CoinIcon, EditIcon, HistoryIcon, SettingsIcon } from './icons'
 import { fetchBalance, formatBalance, type SakrylleBalance } from '../lib/sakrylleAccount'
 import { beginLogin as sakrylleBeginLogin, getStoredToken } from '../lib/sakrylleAuth'
-import { readStoredTheme, switchTheme, type Theme } from '../lib/theme'
+import { getThemeSwitchOrigin, readStoredTheme, switchTheme, type Theme } from '../lib/theme'
 import type { Language } from '../lib/language'
 
 const SAKRYLLE_PURCHASE_URL = 'https://ai1.sakrylle.com/purchase'
@@ -141,13 +142,10 @@ export default function Header() {
 
   const handleToggleTheme = (event: React.MouseEvent<HTMLButtonElement>) => {
     dismissAllTooltips()
-    const rect = event.currentTarget.getBoundingClientRect()
+    const origin = getThemeSwitchOrigin(event)
     const current: Theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light'
     const next: Theme = current === 'dark' ? 'light' : 'dark'
-    setThemeState(next)
-    switchTheme(next, {
-      origin: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
-    })
+    switchTheme(next, { origin, onApply: () => flushSync(() => setThemeState(next)) })
   }
 
   const handleToggleLanguage = () => {

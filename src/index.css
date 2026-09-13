@@ -673,33 +673,27 @@ html.dark [contenteditable] *::selection {
   }
 }
 
-/* Telegram-style theme switch — the browser's View Transition snapshots the
-   old frame and clips the new frame in with a circular expand from the click
-   point. Native GPU compositing: no flash, no per-element transition stutter.
-   The page is intentionally frozen for the duration (View Transition holds
-   static snapshots in the top layer); this is the accepted trade-off for a
-   real old→new reveal, see CLAUDE.md / git history for the alternatives tried. */
-::view-transition-group(root),
-::view-transition-image-pair(root),
-::view-transition-old(root),
-::view-transition-new(root) {
+/* Snapshot-scoped CSS avoids retaining filled WAAPI effects on html.
+   Coordinates are percentages established before capture, including first use. */
+html.theme-toggling::view-transition-group(root),
+html.theme-toggling::view-transition-image-pair(root),
+html.theme-toggling::view-transition-old(root) {
   animation: none;
   mix-blend-mode: normal;
 }
-::view-transition-old(root) {
-  /* Old theme stays put underneath; the new theme expands over it. */
-  z-index: 1;
-}
-::view-transition-new(root) {
+html.theme-toggling::view-transition-old(root) { z-index: 1; }
+html.theme-toggling::view-transition-new(root) {
   z-index: 2;
-  /* theme.ts supplies viewport coordinates directly through the Web Animations
-     API after the new snapshot is ready. */
+  mix-blend-mode: normal;
+  animation: theme-switch-clip 480ms linear both;
 }
-
+@keyframes theme-switch-clip {
+  from { clip-path: circle(0% at var(--theme-switch-x) var(--theme-switch-y)); }
+  to { clip-path: circle(var(--theme-switch-radius) at var(--theme-switch-x) var(--theme-switch-y)); }
+}
+html.theme-toggling, html.theme-toggling * { transition: none !important; }
 @media (prefers-reduced-motion: reduce) {
-  ::view-transition-new(root) {
-    animation: none;
-  }
+  html.theme-toggling::view-transition-new(root) { animation: none; }
 }
 
 /* Keep settings help readable and technical tokens intact on narrow screens. */
