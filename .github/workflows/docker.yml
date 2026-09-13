@@ -60,7 +60,7 @@ jobs:
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          jq -n --arg commit "$GITHUB_SHA" --arg digest "$IMAGE_DIGEST" --arg image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/gpt_image_playground" '{commit:$commit,image:$image,digest:$digest,platforms:["linux/amd64","linux/arm64"]}' > release-provenance.json
+          jq -n --arg commit "$GITHUB_SHA" --arg digest "$IMAGE_DIGEST" --arg image "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/gpt_image_playground" '{commit:$commit,image:$image,digest:$digest,platforms:["linux/amd64","linux/arm64"]}' > release-provenance.json
           cat release-provenance.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
