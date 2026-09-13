@@ -1,4 +1,6 @@
+import i18n from './i18n'
 import type { AgentRound, ResponsesApiResponse, ResponsesOutputItem, TaskRecord } from '../types'
+import { normalizeResponsesOutputItems } from './responsesOutputState'
 
 export interface AgentWebSearchCallSummary {
   id?: string
@@ -27,9 +29,9 @@ function getWebSearchActionType(action: unknown) {
 }
 
 function getRunningStatusText(actionType: string) {
-  if (actionType === 'open_page') return '正在读取网页'
-  if (actionType === 'find_in_page') return '正在查找内容'
-  return '正在搜索网页'
+  if (actionType === 'open_page') return i18n.t("agentWebSearch.openingPage")
+  if (actionType === 'find_in_page') return i18n.t("agentWebSearch.findingInPage")
+  return i18n.t("agentWebSearch.searching")
 }
 
 export function collectWebSearchCalls(output: ResponsesOutputItem[] | undefined): AgentWebSearchCallSummary[] {
@@ -45,10 +47,10 @@ export function collectWebSearchCalls(output: ResponsesOutputItem[] | undefined)
 export function getWebSearchStatusForCalls(calls: AgentWebSearchCallSummary[]): AgentWebSearchStatus | null {
   const latestCall = calls[calls.length - 1]
   if (!latestCall) return null
-  if (calls.some((call) => call.status === 'failed')) return { text: '搜索失败', completed: true }
+  if (calls.some((call) => call.status === 'failed')) return { text: i18n.t("agentWebSearch.searchFailed"), completed: true }
   const completed = calls.every((call) => call.status === 'completed')
   return {
-    text: completed ? '完成搜索' : getRunningStatusText(latestCall.actionType),
+    text: completed ? i18n.t("agentWebSearch.searchCompleted") : getRunningStatusText(latestCall.actionType),
     completed,
   }
 }
@@ -62,7 +64,8 @@ export function getAgentRoundOutputItems(round: AgentRound | null, tasks: TaskRe
     if (!task?.rawResponsePayload) continue
     try {
       const payload = JSON.parse(task.rawResponsePayload) as ResponsesApiResponse
-      if (payload.output?.length) return payload.output
+      const output = normalizeResponsesOutputItems(payload.output)
+      if (output.length) return output
     } catch {
       continue
     }

@@ -1,7 +1,7 @@
 {
   "name": "sakrylle-image-playground",
   "private": true,
-  "version": "0.11.6",
+  "version": "0.12.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,7 +15,7 @@
   "dependencies": {
     "@streamdown/math": "^1.0.2",
     "core-js": "^3.49.0",
-    "fflate": "^0.8.2",
+    "fflate": "^0.8.3",
     "heic-to": "^1.5.2",
     "i18next": "^26.2.0",
     "katex": "^0.16.47",
@@ -36,6 +36,7 @@
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^4.4.1",
     "autoprefixer": "^10.4.21",
+    "jsdom": "^29.1.1",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3",

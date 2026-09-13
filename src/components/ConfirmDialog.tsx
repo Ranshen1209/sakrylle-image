@@ -1,3 +1,4 @@
+import i18n from '../lib/i18n'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useStore } from '../store'
@@ -51,6 +52,7 @@ export default function ConfirmDialog() {
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const [canConfirm, setCanConfirm] = useState(true)
   const [checkboxChecked, setCheckboxChecked] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
     const delay = confirmDialog?.minConfirmDelayMs ?? 0
@@ -69,7 +71,7 @@ export default function ConfirmDialog() {
   }, [confirmDialog])
 
   const handleClose = () => {
-    if (!canConfirm) return
+    if (!canConfirm || isSubmitting) return
     setConfirmDialog(null)
   }
 
@@ -82,7 +84,7 @@ export default function ConfirmDialog() {
   usePreventBackgroundScroll(Boolean(confirmDialog))
 
   if (!confirmDialog) return null
-  const isDestructive = confirmDialog.title.includes('删除') || confirmDialog.title.includes('清空')
+  const isDestructive = confirmDialog.title.includes(i18n.t("history.delete")) || confirmDialog.title.includes(i18n.t("input.clearShort"))
   const confirmTone = confirmDialog.tone ?? (isDestructive ? 'danger' : undefined)
   const confirmClassName = getActionButtonClass(confirmTone === 'danger' || confirmTone === 'warning' ? confirmTone : 'primary')
   const confirmText = confirmDialog.confirmText ?? (isDestructive ? t('common.confirmDelete') : t('common.confirm'))
@@ -148,19 +150,32 @@ export default function ConfirmDialog() {
             {confirmDialog.showCancel !== false && (
               <button
                 onClick={handleCancel}
-                className="flex-1 py-2 rounded-lg border border-gray-200 dark:border-white/[0.08] text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition"
+                disabled={isSubmitting}
+                className="flex-1 py-2 rounded-xl border border-gray-200 dark:border-white/[0.08] text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06] transition disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {cancelText}
               </button>
             )}
             <button
               onClick={() => {
-                if (!canConfirm) return
-                confirmDialog.action?.(checkboxChecked)
-                setConfirmDialog(null)
+                if (!canConfirm || isSubmitting) return
+                if (!confirmDialog.awaitAction) {
+                  confirmDialog.action?.(checkboxChecked)
+                  setConfirmDialog(null)
+                  return
+                }
+                setIsSubmitting(true)
+                void (async () => {
+                  try {
+                    const shouldClose = await confirmDialog.action?.(checkboxChecked)
+                    if (shouldClose !== false) setConfirmDialog(null)
+                  } finally {
+                    setIsSubmitting(false)
+                  }
+                })()
               }}
-              disabled={!canConfirm}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${confirmClassName}`}
+              disabled={!canConfirm || isSubmitting}
+              className={`flex-1 py-2 rounded-xl text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${confirmClassName}`}
             >
               {confirmText}
             </button>

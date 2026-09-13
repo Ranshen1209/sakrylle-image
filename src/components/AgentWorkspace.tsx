@@ -1,10 +1,15 @@
+import { renderAssistantStatus, startsWithAgentErrorPrefix, stripAgentErrorPrefix } from '../lib/agentSentinels'
+import i18n from '../lib/i18n'
 import { useEffect, useMemo, useState, useRef, useCallback, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { AgentConversation, AgentMessage, AgentRound, ResponsesOutputItem, TaskRecord } from '../types'
-import { deleteAgentRoundFromConversation, editOutputs, getActiveAgentRounds, getAgentBranchLeafId, getAgentSiblingRounds, getCachedImage, ensureImageCached, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, useStore } from '../store'
+import type { AgentMessage, AgentRound, TaskRecord } from '../types'
+import { editOutputs, regenerateAgentAssistantMessage, removeMultipleTasks, removeTask, reuseConfig, useStore } from '../store'
+import { getActiveAgentRounds, getAgentBranchLeafId, getConversationSearchText, getAgentRoundTaskIds, getAgentSiblingRounds } from '../lib/agentConversationState'
+import { ensureImageCached, getCachedImage } from '../lib/imageCache'
 import { getPromptMentionParts } from '../lib/promptImageMentions'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { collectWebSearchCalls, getAgentRoundOutputItems, getWebSearchStatusForCalls, type AgentWebSearchStatus } from '../lib/agentWebSearch'
+import type { AgentWebSearchStatus } from '../lib/agentWebSearch'
+import { getAgentAssistantBlocks, getAgentAssistantCopyContent, getRoundTaskSlots } from '../lib/agentAssistantBlocks'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from '../lib/downloadImages'
 import TaskCard from './TaskCard'
@@ -48,13 +53,13 @@ function ChatImageThumb({ imageId, imageIndex, maskImageId }: { imageId: string;
   return (
     <div 
       className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-lg shadow-sm cursor-pointer transition-opacity hover:opacity-90 ${
-        maskImageId ? 'border-2 border-blue-500' : 'border border-gray-200 dark:border-white/[0.08]'
+        maskImageId ? 'border-2 border-[#9181bd]' : 'border border-gray-200 dark:border-white/[0.08]'
       }`}
       onClick={() => setLightboxImageId(imageId, [imageId])}
     >
       {src ? <img src={src} className="h-full w-full object-cover" alt="" /> : <div className="h-full w-full bg-gray-100 dark:bg-white/[0.04]" />}
       {maskImageId && (
-        <span className="absolute left-1 top-1 z-10 rounded bg-blue-500/90 px-1.5 py-0.5 text-[8px] font-bold leading-none tracking-wider text-white backdrop-blur-sm pointer-events-none">
+        <span className="absolute left-1 top-1 z-10 rounded bg-[#9181bd]/90 px-1.5 py-0.5 text-[8px] font-bold leading-none tracking-wider text-white backdrop-blur-sm pointer-events-none">
           MASK
         </span>
       )}
@@ -68,13 +73,11 @@ function ChatImageThumb({ imageId, imageIndex, maskImageId }: { imageId: string;
 function AgentStreamingCursor() {
   return (
     <span
-      aria-label="正在生成"
-      className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500 align-baseline dark:bg-blue-400"
+      aria-label={i18n.t("agent.generating")}
+      className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-[#9181bd] align-baseline dark:bg-[#a28fc9]"
     />
   )
 }
-
-const AGENT_STOPPED_MESSAGE = '已停止生成。'
 
 function formatTime(value: number) {
   return new Date(value).toLocaleString()
@@ -101,168 +104,6 @@ function AgentWebSearchStatusLines({ statuses }: { statuses: AgentWebSearchStatu
   )
 }
 
-type AgentAssistantBlock =
-  | { type: 'web-search'; status: AgentWebSearchStatus; key: string }
-  | { type: 'batch-params'; status: AgentWebSearchStatus; key: string }
-  | { type: 'image-task'; task: TaskRecord; key: string }
-  | { type: 'deleted-image-task'; taskId: string; key: string }
-  | { type: 'text'; key: string; content?: string }
-
-interface AgentRoundTaskSlot {
-  taskId: string
-  task: TaskRecord | null
-}
-
-function isAgentRoundInterrupted(round: AgentRound | null) {
-  return round?.status === 'error' && round.error === AGENT_STOPPED_MESSAGE
-}
-
-function markToolStatusStopped(status: AgentWebSearchStatus): AgentWebSearchStatus {
-  if (status.completed) return status
-  return { text: status.text.replace(/^正在/, '已停止'), completed: true }
-}
-
-function getImageTaskForOutputItem(item: ResponsesOutputItem, tasksForRound: TaskRecord[]) {
-  if (item.type === 'image_generation_call') {
-    return tasksForRound.find((task) => task.agentToolCallId && task.agentToolCallId === item.id) ?? null
-  }
-  if (item.type === 'function_call' && item.name === 'generate_image' && item.call_id) {
-    return tasksForRound.find((task) => task.agentToolCallId === item.call_id) ?? null
-  }
-  return null
-}
-
-function getBatchImageTasksForOutputItem(item: ResponsesOutputItem, tasksForRound: TaskRecord[]) {
-  if (item.type !== 'function_call' || item.name !== 'generate_image_batch' || !item.call_id) return []
-  return tasksForRound.filter((task) => task.agentBatchCallId === item.call_id)
-}
-
-function getTextFromOutputItem(item: ResponsesOutputItem) {
-  if (item.type !== 'message') return ''
-  return (item.content ?? [])
-    .map((part) => typeof part.text === 'string' ? part.text : '')
-    .filter(Boolean)
-    .join('\n')
-    .trim()
-}
-
-function getAgentAssistantBlocks(round: AgentRound | null, taskSlots: AgentRoundTaskSlot[], allTasks: TaskRecord[], hasText: boolean): AgentAssistantBlock[] {
-  const outputItems = getAgentRoundOutputItems(round, allTasks)
-  const tasksForRound = taskSlots.map((slot) => slot.task).filter(Boolean) as TaskRecord[]
-  const roundInterrupted = isAgentRoundInterrupted(round)
-  if (outputItems.length === 0) {
-    return [
-      ...(hasText ? [{ type: 'text' as const, key: 'text:fallback' }] : []),
-      ...taskSlots.map((slot) => slot.task
-        ? ({ type: 'image-task' as const, task: slot.task, key: `image:${slot.task.id}` })
-        : ({ type: 'deleted-image-task' as const, taskId: slot.taskId, key: `deleted-image:${slot.taskId}` }),
-      ),
-    ]
-  }
-
-  const blocks: AgentAssistantBlock[] = []
-  const renderedTaskIds = new Set<string>()
-  let renderedTextBlocks = 0
-  let webSearchGroup: ResponsesOutputItem[] = []
-
-  const flushWebSearchGroup = () => {
-    if (webSearchGroup.length === 0) return
-    const status = getWebSearchStatusForCalls(collectWebSearchCalls(webSearchGroup))
-    if (status) blocks.push({ type: 'web-search', status: roundInterrupted ? markToolStatusStopped(status) : status, key: `web-search:${blocks.length}:${webSearchGroup.map((item) => item.id).join(':')}` })
-    webSearchGroup = []
-  }
-
-  for (const item of outputItems) {
-    if (item.type === 'web_search_call') {
-      webSearchGroup.push(item)
-      continue
-    }
-
-    flushWebSearchGroup()
-
-    const imageTask = getImageTaskForOutputItem(item, tasksForRound)
-    if (imageTask && !renderedTaskIds.has(imageTask.id)) {
-      renderedTaskIds.add(imageTask.id)
-      blocks.push({ type: 'image-task', task: imageTask, key: `image:${imageTask.id}` })
-      continue
-    }
-
-    const batchImageTasks = getBatchImageTasksForOutputItem(item, tasksForRound)
-    if (batchImageTasks.length > 0) {
-      for (const task of batchImageTasks) {
-        if (renderedTaskIds.has(task.id)) continue
-        renderedTaskIds.add(task.id)
-        blocks.push({ type: 'image-task', task, key: `image:${task.id}` })
-      }
-      continue
-    }
-
-    if ((round?.status === 'running' || roundInterrupted) && item.type === 'function_call' && item.name === 'generate_image_batch') {
-      blocks.push({
-        type: 'batch-params',
-        status: roundInterrupted
-          ? markToolStatusStopped({ text: '正在填写并发图像生成参数', completed: false })
-          : { text: '正在填写并发图像生成参数', completed: false },
-        key: `batch-params:${item.call_id ?? item.id ?? blocks.length}`,
-      })
-      continue
-    }
-
-    if (item.type === 'message') {
-      const content = getTextFromOutputItem(item)
-      if (content) {
-        renderedTextBlocks += 1
-        blocks.push({ type: 'text', key: `text:${item.id ?? blocks.length}`, content })
-      }
-    }
-  }
-
-  flushWebSearchGroup()
-
-  if (hasText && renderedTextBlocks === 0) blocks.push({ type: 'text', key: 'text:fallback' })
-  for (const slot of taskSlots) {
-    if (slot.task) {
-      if (!renderedTaskIds.has(slot.task.id)) blocks.push({ type: 'image-task', task: slot.task, key: `image:${slot.task.id}` })
-    } else {
-      blocks.push({ type: 'deleted-image-task', taskId: slot.taskId, key: `deleted-image:${slot.taskId}` })
-    }
-  }
-  return blocks
-}
-
-function getAgentAssistantCopyContent(fallbackContent: string, blocks: AgentAssistantBlock[]) {
-  if (!blocks.some((block) => block.type !== 'text')) return fallbackContent
-
-  const parts = blocks
-    .filter((block): block is Extract<AgentAssistantBlock, { type: 'text' }> => block.type === 'text')
-    .map((block) => block.content ?? '')
-    .map((content) => content.trim())
-    .filter(Boolean)
-
-  return parts.length > 0 ? parts.join('\n\n') : fallbackContent
-}
-
-function getConversationSearchText(conversation: AgentConversation) {
-  return [
-    conversation.title,
-    ...conversation.messages.map((message) => message.content),
-    ...conversation.rounds.map((round) => round.prompt),
-  ].join('\n').toLocaleLowerCase()
-}
-
-function getRoundTasks(round: AgentRound | null, tasks: TaskRecord[], taskById?: Map<string, TaskRecord>) {
-  if (!round) return []
-  return round.outputTaskIds.map((taskId) => taskById?.get(taskId) ?? tasks.find((task) => task.id === taskId) ?? null)
-}
-
-function getRoundTaskSlots(round: AgentRound | null, tasks: TaskRecord[], taskById?: Map<string, TaskRecord>): AgentRoundTaskSlot[] {
-  if (!round) return []
-  return round.outputTaskIds.map((taskId) => ({
-    taskId,
-    task: taskById?.get(taskId) ?? tasks.find((task) => task.id === taskId) ?? null,
-  }))
-}
-
 const MOBILE_HEADER_PULL_THRESHOLD = 24
 const MOBILE_HEADER_PULL_MAX_OFFSET = 48
 const MOBILE_HEADER_EDGE_GUARD = 24
@@ -287,6 +128,8 @@ export default function AgentWorkspace() {
   const setActiveConversationId = useStore((s) => s.setActiveAgentConversationId)
   const renameConversation = useStore((s) => s.renameAgentConversation)
   const deleteConversation = useStore((s) => s.deleteAgentConversation)
+  const deleteAgentRound = useStore((s) => s.deleteAgentRound)
+  const deleteAgentAssistantMessage = useStore((s) => s.deleteAgentAssistantMessage)
   const sidebarCollapsed = useStore((s) => s.agentSidebarCollapsed)
   const setSidebarCollapsed = useStore((s) => s.setAgentSidebarCollapsed)
   const agentMobileHeaderVisible = useStore((s) => s.agentMobileHeaderVisible)
@@ -676,11 +519,11 @@ export default function AgentWorkspace() {
     ).size
 
     setConfirmDialog({
-      title: '删除对话',
-      message: '确定要删除这个 Agent 对话吗？',
+      title: i18n.t("history.deleteConversationTitle"),
+      message: i18n.t("history.deleteConversationMessage"),
       checkbox: generatedImageCount > 0
         ? {
-            label: `同时删除对话中生成的图片（${generatedImageCount} 张）`,
+            label: i18n.t('upstreamSync.message0', { value0: generatedImageCount }),
             tone: 'danger',
           }
         : undefined,
@@ -694,7 +537,7 @@ export default function AgentWorkspace() {
   const startRenameConversation = (e: ReactMouseEvent | React.TouchEvent, id: string, currentTitle: string) => {
     e.stopPropagation()
     if (agentGeneratingTitleIds[id]) {
-      showToast('标题生成中，暂不能修改标题', 'info')
+      showToast(i18n.t("agent.titleGenerating"), 'info')
       return
     }
     setAgentEditingConversationId(id)
@@ -763,83 +606,48 @@ export default function AgentWorkspace() {
 
   const handleDeleteMessage = (message: AgentMessage, round: AgentRound) => {
     const isUserMessage = message.role === 'user'
-    const existingTaskIds = new Set(tasks.map((task) => task.id))
-    const assistantTaskIds = isUserMessage
-      ? []
-      : Array.from(new Set([
-          ...(message.outputTaskIds ?? []),
-          ...round.outputTaskIds,
-          ...tasks
-            .filter((task) => task.agentMessageId === message.id || task.agentRoundId === round.id)
-            .map((task) => task.id),
-        ])).filter((taskId) => existingTaskIds.has(taskId))
+    const conversationId = conversation?.id
     setConfirmDialog({
-      title: isUserMessage ? '删除轮次' : '删除消息',
+      title: isUserMessage ? i18n.t("agent.deleteRoundTitle") : i18n.t("agent.deleteMessageTooltip"),
       message: isUserMessage
-        ? '确定要删除这轮任务吗？这会删除这条消息和它的输出，后续消息会被保留。'
-        : '确定要删除这条消息吗？这会同时删除这条回复生成的图片。',
+        ? i18n.t("upstreamSync.deleteThisRoundAndItsOutputsLaterMessages")
+        : i18n.t("upstreamSync.deleteThisMessageAndTheImagesItGenerated"),
+      awaitAction: true,
       action: async () => {
-        if (isUserMessage) {
-          if (round.outputTaskIds.length > 0) await removeMultipleTasks(round.outputTaskIds)
-
-          useStore.setState((state) => {
-            const targetConversationId = conversation?.id
-            let oldActivePath: AgentRound[] = []
-            let newActivePath: AgentRound[] = []
-            const agentConversations = state.agentConversations.map((item) => {
-              if (item.id !== targetConversationId) return item
-              oldActivePath = getActiveAgentRounds(item)
-              const nextConversation = deleteAgentRoundFromConversation(item, round.id)
-              newActivePath = getActiveAgentRounds(nextConversation)
-              return nextConversation
-            })
-            const draft = targetConversationId ? state.agentInputDrafts[targetConversationId] : null
-            const remappedDraft = draft
-              ? { ...draft, prompt: remapAgentRoundMentionsForPathChange(draft.prompt, oldActivePath, newActivePath) }
-              : null
-            const agentInputDrafts = targetConversationId && remappedDraft
-              ? { ...state.agentInputDrafts, [targetConversationId]: remappedDraft }
-              : state.agentInputDrafts
-            const shouldRemapVisibleInput = targetConversationId && state.activeAgentConversationId === targetConversationId && state.appMode === 'agent'
-            return {
-              agentConversations,
-              agentInputDrafts,
-              ...(shouldRemapVisibleInput ? { prompt: remapAgentRoundMentionsForPathChange(state.prompt, oldActivePath, newActivePath) } : {}),
-              agentEditingRoundId: state.agentEditingRoundId === round.id ? null : state.agentEditingRoundId,
-            }
-          })
-          return
+        if (!conversationId) return true
+        try {
+          const result = isUserMessage
+            ? await deleteAgentRound(conversationId, round.id)
+            : await deleteAgentAssistantMessage(conversationId, message.id)
+          if (result === 'running') {
+            showToast(i18n.t("upstreamSync.stopGenerationBeforeDeletingThisRound"), 'info')
+            return true
+          }
+          if (result === 'not-found') {
+            showToast(isUserMessage ? i18n.t("upstreamSync.thisRoundNoLongerExists") : i18n.t("upstreamSync.thisMessageNoLongerExists"), 'info')
+            return true
+          }
+          if (result === 'deleted-with-warning') {
+            showToast(i18n.t("upstreamSync.deletedButLocalStorageOrImageCleanupIs"), 'error')
+            return true
+          }
+          showToast(isUserMessage ? i18n.t("upstreamSync.roundDeleted") : i18n.t("upstreamSync.messageDeleted"), 'success')
+          return true
+        } catch (err) {
+          console.error(err)
+          showToast(isUserMessage ? i18n.t("upstreamSync.failedToDeleteRound") : i18n.t("upstreamSync.failedToDeleteMessage"), 'error')
+          return false
         }
-
-        if (assistantTaskIds.length > 0) await removeMultipleTasks(assistantTaskIds)
-
-        useStore.setState((state) => ({
-          agentConversations: state.agentConversations.map((item) =>
-            item.id === conversation?.id
-              ? {
-                  ...item,
-                  updatedAt: Date.now(),
-                  rounds: item.rounds.map((candidate) =>
-                    candidate.id === round.id && candidate.assistantMessageId === message.id
-                      ? { ...candidate, assistantMessageId: undefined }
-                      : candidate,
-                  ),
-                  messages: item.messages.filter((candidate) => candidate.id !== message.id),
-                }
-              : item,
-          ),
-          agentEditingRoundId: state.agentEditingRoundId,
-        }))
       },
     })
   }
 
   const handleReuse = (task: TaskRecord) => {
     setConfirmDialog({
-      title: '切换到画廊模式？',
-      message: '复用参数会应用到画廊输入区。切换到画廊模式后，当前 Agent 对话仍会保留。',
-      confirmText: '切换并复用',
-      cancelText: '取消',
+      title: i18n.t("agent.switchToGalleryTitle"),
+      message: i18n.t("agent.switchToGalleryMessage"),
+      confirmText: i18n.t("agent.switchToGalleryConfirm"),
+      cancelText: i18n.t("size.cancel"),
       action: () => {
         setAppMode('gallery')
         void reuseConfig(task)
@@ -872,7 +680,7 @@ export default function AgentWorkspace() {
     setPrompt(content)
   }
 
-  const handleCopyMessage = async (content: string, successMessage = '提示词已复制', failureMessage = '复制提示词失败') => {
+  const handleCopyMessage = async (content: string, successMessage = i18n.t("detail.promptCopied"), failureMessage = i18n.t("detail.promptCopyFailed")) => {
     try {
       await copyTextToClipboard(content)
       showToast(successMessage, 'success')
@@ -898,7 +706,7 @@ export default function AgentWorkspace() {
       if ((selection.anchorNode && target.contains(selection.anchorNode)) || (selection.focusNode && target.contains(selection.focusNode))) return
     }
 
-    void handleCopyMessage(content, '完整报错已复制', '复制完整报错失败')
+    void handleCopyMessage(content, i18n.t("detail.errorCopied"), i18n.t("agent.errorCopyFailed"))
   }
 
   return (
@@ -928,7 +736,7 @@ export default function AgentWorkspace() {
         <div className="pl-[max(1rem,env(safe-area-inset-left))] flex h-full min-h-0 w-full flex-col">
           <div className="safe-area-top shrink-0">
             <div className="flex h-14 items-center justify-between gap-2 px-4">
-              <button type="button" onClick={() => setSidebarCollapsed(true)} className="lg:hidden p-2 -ml-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title="折叠左侧边栏">
+              <button type="button" onClick={() => setSidebarCollapsed(true)} className="lg:hidden p-2 -ml-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 rounded-lg transition-colors" title={i18n.t("agent.collapseSidebar")}>
                 <SidebarLeftIcon className="w-5 h-5" />
               </button>
               <button type="button" onClick={createConversation} className="p-2 -mr-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 lg:hover:bg-gray-100 lg:dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="新对话">
@@ -941,13 +749,13 @@ export default function AgentWorkspace() {
               type="text"
               value={conversationSearchQuery}
               onChange={(e) => setConversationSearchQuery(e.target.value)}
-              placeholder="搜索聊天..."
-              className="w-full rounded-xl border border-gray-200 bg-gray-100/80 px-3 py-2 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-blue-400 focus:bg-white dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-white dark:focus:border-blue-400 dark:focus:bg-white/[0.07]"
+              placeholder={i18n.t("history.searchPlaceholder")}
+              className="w-full rounded-xl border border-gray-200 bg-gray-100/80 px-3 py-2 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-[#a28fc9] focus:bg-white dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-white dark:focus:border-[#a28fc9] dark:focus:bg-white/[0.07]"
             />
           </div>
           <div className="space-y-1 overflow-y-auto flex-1 px-4 pb-4">
           {filteredConversations.length === 0 && (
-            <div className="px-2 py-8 text-center text-sm text-gray-400">没有找到匹配的聊天</div>
+            <div className="px-2 py-8 text-center text-sm text-gray-400">{i18n.t("history.noResults")}</div>
           )}
           {filteredConversations.map((item) => {
             const isGeneratingTitle = Boolean(agentGeneratingTitleIds[item.id])
@@ -968,7 +776,7 @@ export default function AgentWorkspace() {
                   <div className="min-w-0 flex-1 flex flex-col justify-center h-[38px]">
                     <input
                       type="text"
-                      className="h-7 flex-1 bg-white dark:bg-black/20 border border-blue-400/50 dark:border-white/20 rounded px-1.5 py-0 text-sm leading-7 outline-none text-gray-900 dark:text-white focus:border-blue-500 dark:focus:border-white/40 shadow-sm min-w-0"
+                      className="h-7 flex-1 bg-white dark:bg-black/20 border border-[#a28fc9]/50 dark:border-white/20 rounded px-1.5 py-0 text-sm leading-7 outline-none text-gray-900 dark:text-white focus:border-[#9181bd] dark:focus:border-white/40 shadow-sm min-w-0"
                       value={editingConversationTitle}
                       onChange={(e) => setEditingConversationTitle(e.target.value)}
                       onKeyDown={handleRenameKeyDown}
@@ -986,7 +794,7 @@ export default function AgentWorkspace() {
                 <div className={`flex shrink-0 items-center gap-1 overflow-hidden transition-all duration-150 ${agentEditingConversationId === item.id ? 'w-6 opacity-100' : `group-hover:w-[4.5rem] group-hover:opacity-100 group-focus-within:w-[4.5rem] group-focus-within:opacity-100 ${conversationActionsId === item.id ? 'w-[4.5rem] opacity-100' : 'w-0 opacity-0'}`}`}>
                   {agentEditingConversationId === item.id ? (
                     <AgentActionButton
-                      tooltip="确认"
+                      tooltip={i18n.t("history.confirm")}
                       onClick={(e) => e.stopPropagation()}
                       onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); confirmRenameConversation() }}
                       className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-green-500 hover:text-green-600 transition-colors"
@@ -997,10 +805,10 @@ export default function AgentWorkspace() {
                     </AgentActionButton>
                   ) : (
                     <>
-                      <AgentActionButton tooltip="编辑标题" className="p-1.5 text-gray-400 hover:text-gray-700 disabled:text-gray-300 disabled:hover:text-gray-300 disabled:cursor-not-allowed dark:hover:text-gray-200 dark:disabled:text-gray-600 dark:disabled:hover:text-gray-600" onClick={(e) => startRenameConversation(e, item.id, item.title)} disabled={isGeneratingTitle}>
+                      <AgentActionButton tooltip={i18n.t("agent.editTitle")} className="p-1.5 text-gray-400 hover:text-gray-700 disabled:text-gray-300 disabled:hover:text-gray-300 disabled:cursor-not-allowed dark:hover:text-gray-200 dark:disabled:text-gray-600 dark:disabled:hover:text-gray-600" onClick={(e) => startRenameConversation(e, item.id, item.title)} disabled={isGeneratingTitle}>
                         <EditIcon className="w-4 h-4" />
                       </AgentActionButton>
-                      <AgentActionButton tooltip="删除" className="p-1.5 text-gray-400 hover:text-red-500" onClick={(e) => { e.stopPropagation(); handleDeleteConversation(item.id) }}>
+                      <AgentActionButton tooltip={i18n.t("history.delete")} className="p-1.5 text-gray-400 hover:text-red-500" onClick={(e) => { e.stopPropagation(); handleDeleteConversation(item.id) }}>
                         <TrashIcon className="w-4 h-4" />
                       </AgentActionButton>
                     </>
@@ -1023,7 +831,7 @@ export default function AgentWorkspace() {
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
           >
-            <button type="button" onClick={() => setSidebarCollapsed(false)} className="p-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors" title="展开对话列表">
+            <button type="button" onClick={() => setSidebarCollapsed(false)} className="p-2 text-gray-500 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors" title={i18n.t("agent.expandConversationList")}>
               <SidebarLeftIcon className="w-5 h-5" />
             </button>
             <button
@@ -1053,21 +861,22 @@ export default function AgentWorkspace() {
         >
           {!conversation ? (
             <div className="py-20 text-center text-gray-400">
-              <p className="mb-3">还没有 Agent 对话</p>
-              <button type="button" onClick={createConversation} className="rounded-lg bg-blue-500 px-4 py-2 text-white hover:bg-blue-600 transition-colors">创建对话</button>
+              <p className="mb-3">{i18n.t("agent.noConversations")}</p>
+              <button type="button" onClick={createConversation} className="rounded-lg bg-[#9181bd] px-4 py-2 text-white hover:bg-[#7e6aa9] transition-colors">{i18n.t("agent.createConversation")}</button>
             </div>
           ) : (
             (() => {
               if (activeMessages.length === 0) {
                 return (
                   <div className="py-20 text-center text-gray-400">
-                    <p className="mb-2">开始新的 Agent 对话</p>
-                    <p className="text-xs">在底部输入框发送消息即可创建第一轮对话。</p>
+                    <p className="mb-2">{i18n.t("agent.startConversation")}</p>
+                    <p className="text-xs">{i18n.t("agent.startConversationHint")}</p>
                   </div>
                 )
               }
 
-              const renderedMessages = activeMessages.map((message) => {
+              const renderedMessages = activeMessages.map((storedMessage) => {
+                const message = storedMessage.role === 'assistant' ? { ...storedMessage, content: renderAssistantStatus(storedMessage.content) } : storedMessage
                 const round = roundById.get(message.roundId)
                 const isAssistant = message.role === 'assistant'
                 const isStreamingAssistant = isAssistant && round?.status === 'running'
@@ -1075,15 +884,16 @@ export default function AgentWorkspace() {
                 const siblingRounds = !isAssistant && round ? getAgentSiblingRounds(conversation, round) : []
                 const siblingIndex = round ? siblingRounds.findIndex((item) => item.id === round.id) : -1
                 const hasBranches = siblingRounds.length > 1
-                const taskSlotsForRound = isAssistant ? getRoundTaskSlots(round ?? null, tasks, taskById) : []
+                const taskSlotsForRound = isAssistant ? getRoundTaskSlots(round ?? null, tasks) : []
                 const tasksForRound = taskSlotsForRound.map((slot) => slot.task).filter(Boolean) as TaskRecord[]
+                const hasRoundTasks = tasksForRound.length > 0
                 const favoriteTasksForRound = tasksForRound.filter((task) => (task.outputImages?.length ?? 0) > 0)
                 const hasRoundFavoriteTasks = favoriteTasksForRound.length > 0
                 const allRoundTasksFavorited = hasRoundFavoriteTasks && favoriteTasksForRound.every((task) => task.isFavorite)
                 const assistantBlocks = isAssistant ? getAgentAssistantBlocks(round ?? null, taskSlotsForRound, tasks, Boolean(message.content.trim())) : []
                 const inputImagesForRound = (round?.inputImageIds || []).map(id => ({ id, dataUrl: '' }))
                 const parts = getPromptMentionParts(message.content, inputImagesForRound)
-                const roundTasks = isAssistant ? getRoundTasks(round ?? null, tasks, taskById).filter(Boolean) : []
+                const roundTasks = isAssistant ? tasksForRound : []
                 return (
                   <div key={message.id} className={`flex w-full mb-6 ${isAssistant ? 'justify-start' : 'justify-end'}`}>
                     <div
@@ -1097,12 +907,12 @@ export default function AgentWorkspace() {
                         className={`relative flex min-w-[16rem] max-w-full flex-col rounded-2xl p-4 transition-all duration-200 ${
                         isAssistant 
                           ? 'bg-white/70 dark:bg-white/[0.03] border border-gray-200 dark:border-white/[0.08] rounded-tl-sm hover:bg-white dark:hover:bg-white/[0.04]' 
-                          : `bg-gray-100 dark:bg-[#2A2D31] rounded-tr-sm ${isEditing ? 'ring-2 ring-blue-500/50 dark:ring-blue-400/50' : ''}`
+                          : `bg-gray-100 dark:bg-[#2A2D31] rounded-tr-sm ${isEditing ? 'ring-2 ring-[#9181bd]/50 dark:ring-[#a28fc9]/50' : ''}`
                       }`}
                       >
                     <div className="mb-2 flex items-center justify-between gap-4 text-sm text-gray-500 dark:text-gray-400">
                       <span className="font-medium">
-                         <span className={isAssistant ? 'text-blue-600 dark:text-blue-400 font-semibold' : 'text-gray-700 dark:text-gray-200 font-semibold'}>{isAssistant ? 'Agent' : '用户'}</span> <span className="opacity-60 font-normal ml-1">· 第 {round?.index ?? '?'} 轮</span>
+                         <span className={isAssistant ? 'text-[#7e6aa9] dark:text-[#a28fc9] font-semibold' : 'text-gray-700 dark:text-gray-200 font-semibold'}>{isAssistant ? 'Agent' : i18n.t("agent.user")}</span> <span className="opacity-60 font-normal ml-1">{i18n.t("upstreamSync.roundNumber", { count: round?.index ?? '?' })}</span>
                       </span>
                     </div>
                     
@@ -1119,17 +929,17 @@ export default function AgentWorkspace() {
                       </div>
                     )}
 
-                    {round?.status === 'error' && isAssistant && message.content.startsWith('请求失败：') ? (
+                    {round?.status === 'error' && isAssistant && startsWithAgentErrorPrefix(message.content) ? (
                       <div
                         data-selectable-text
                         className="-m-2 flex cursor-copy select-text flex-col rounded-xl p-2 transition-colors hover:bg-red-50/60 dark:hover:bg-red-500/5"
-                        title="点击复制完整报错"
+                        title={i18n.t("agent.errorClickToCopy")}
                         onPointerDown={handleErrorCopyPointerDown}
                         onClick={(e) => handleErrorCopyClick(e, message.content)}
                       >
                         {(() => {
-                          const content = message.content.replace(/^请求失败：/, '');
-                          const [mainErr, ...hints] = content.split('\n提示：');
+                          const content = stripAgentErrorPrefix(message.content);
+                          const [mainErr, ...hints] = content.split(i18n.t("agent.errorHintPrefix"));
                           return (
                             <>
                               <div className="flex items-start gap-2 text-red-500 dark:text-red-400">
@@ -1142,7 +952,7 @@ export default function AgentWorkspace() {
                               </div>
                               {hints.length > 0 && (
                                 <div className="pl-[26px] mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed text-gray-500 dark:text-gray-400 break-words opacity-90">
-                                  <span className="font-medium">提示：</span>{hints.join('\n提示：')}
+                                  <span className="font-medium">{i18n.t("agent.errorHintPrefix")}</span>{hints.join(i18n.t("agent.errorHintPrefix"))}
                                 </div>
                               )}
                             </>
@@ -1179,7 +989,7 @@ export default function AgentWorkspace() {
                                     onClick={() => setDetailTaskId(block.task.id)}
                                     onReuse={() => handleReuse(block.task)}
                                     onEditOutputs={() => editOutputs(block.task)}
-                                    onDelete={() => setConfirmDialog({ title: '删除任务', message: '确定要删除这个任务吗？', action: () => removeTask(block.task) })}
+                                    onDelete={() => setConfirmDialog({ title: i18n.t("upstreamSync.deleteTask"), message: i18n.t("upstreamSync.deleteThisTask"), action: () => removeTask(block.task) })}
                                   />
                                 </div>
                               )
@@ -1188,7 +998,7 @@ export default function AgentWorkspace() {
                         ) : parts.some((part) => part.type === 'mention') ? (
                           <div className="whitespace-pre-wrap break-words">
                             {parts.map((part, i) =>
-                              part.type === 'text' ? <span key={i}>{part.text}</span> : <span key={i} className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-blue-100/50 text-blue-700 dark:bg-blue-500/30 dark:text-blue-300 text-xs font-medium mx-0.5 align-baseline">{part.text}</span>
+                              part.type === 'text' ? <span key={i}>{part.text}</span> : <span key={i} className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-[#e4d9f5]/50 text-[#5b4d8e] dark:bg-[#9181bd]/30 dark:text-[#b9a9da] text-xs font-medium mx-0.5 align-baseline">{part.text}</span>
                             )}
                           </div>
                         ) : (
@@ -1202,11 +1012,11 @@ export default function AgentWorkspace() {
                     {!isStreamingAssistant && <div className={`mt-2 flex w-full min-w-fit items-center justify-between gap-3 px-1 transition-opacity duration-200 ${isEditing || hasBranches ? 'opacity-100' : 'opacity-100 lg:opacity-0 lg:group-hover:opacity-100'}`} onClick={e => e.stopPropagation()}>
                       <div className="flex min-w-0 items-center gap-2">
                         {isEditing && (
-                          <div className="inline-flex items-center rounded-md bg-blue-100 px-2 py-1 text-xs text-blue-700 dark:bg-blue-500/20 dark:text-blue-300">
-                            <span className="truncate">正在编辑</span>
+                          <div className="inline-flex items-center rounded-md bg-[#e4d9f5] px-2 py-1 text-xs text-[#5b4d8e] dark:bg-[#9181bd]/20 dark:text-[#b9a9da]">
+                            <span className="truncate">{i18n.t("agent.editingBadge")}</span>
                             <AgentActionButton
-                              tooltip="取消编辑"
-                              className="ml-1 -mr-1 p-0.5 rounded-full hover:bg-blue-200 dark:hover:bg-blue-500/40 transition-colors"
+                              tooltip={i18n.t("agent.cancelEditing")}
+                              className="ml-1 -mr-1 p-0.5 rounded-full hover:bg-[#d4c5ec] dark:hover:bg-[#9181bd]/40 transition-colors"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setPrompt('');
@@ -1223,34 +1033,34 @@ export default function AgentWorkspace() {
                       <div className="flex items-center gap-2 ml-auto text-gray-400">
                         {!isAssistant && round && hasBranches && siblingIndex >= 0 && (
                           <div className="inline-flex items-center text-sm font-bold text-gray-400 dark:text-gray-500 mr-1">
-                            <AgentActionButton tooltip="上一分支" className="p-1 rounded-md hover:bg-gray-200/50 dark:hover:bg-white/10 hover:text-gray-800 dark:hover:text-gray-200 transition-colors" onClick={() => handleSwitchBranch(round, -1)}>
+                            <AgentActionButton tooltip={i18n.t("agent.previousBranch")} className="p-1 rounded-md hover:bg-gray-200/50 dark:hover:bg-white/10 hover:text-gray-800 dark:hover:text-gray-200 transition-colors" onClick={() => handleSwitchBranch(round, -1)}>
                               <ChevronLeftIcon className="w-4 h-4" />
                             </AgentActionButton>
                             <span className="px-1 tabular-nums tracking-widest">{siblingIndex + 1}/{siblingRounds.length}</span>
-                            <AgentActionButton tooltip="下一分支" className="p-1 rounded-md hover:bg-gray-200/50 dark:hover:bg-white/10 hover:text-gray-800 dark:hover:text-gray-200 transition-colors" onClick={() => handleSwitchBranch(round, 1)}>
+                            <AgentActionButton tooltip={i18n.t("agent.nextBranch")} className="p-1 rounded-md hover:bg-gray-200/50 dark:hover:bg-white/10 hover:text-gray-800 dark:hover:text-gray-200 transition-colors" onClick={() => handleSwitchBranch(round, 1)}>
                               <ChevronRightIcon className="w-4 h-4" />
                             </AgentActionButton>
                           </div>
                         )}
                         {isAssistant ? (
                           <>
-                            <AgentActionButton tooltip="复制输出文本" className={`p-1.5 rounded-md transition-colors ${message.content.trim() ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-200 dark:hover:bg-white/[0.06]' : 'text-gray-300 dark:text-gray-600 opacity-50 cursor-not-allowed'}`} disabled={!message.content.trim()} onClick={() => {
-                              void handleCopyMessage(getAgentAssistantCopyContent(message.content, assistantBlocks), '输出文本已复制', '复制输出文本失败');
+                            <AgentActionButton tooltip={i18n.t("agent.copyOutputText")} className={`p-1.5 rounded-md transition-colors ${message.content.trim() ? 'text-gray-400 hover:text-gray-700 hover:bg-gray-100 dark:hover:text-gray-200 dark:hover:bg-white/[0.06]' : 'text-gray-300 dark:text-gray-600 opacity-50 cursor-not-allowed'}`} disabled={!message.content.trim()} onClick={() => {
+                              void handleCopyMessage(getAgentAssistantCopyContent(message.content, assistantBlocks), i18n.t("agent.outputCopied"), i18n.t("agent.outputCopyFailed"));
                             }}>
                               <CopyIcon className="w-4 h-4" />
                             </AgentActionButton>
-                            <AgentActionButton tooltip="重新生成" className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors" onClick={() => {
+                            <AgentActionButton tooltip={i18n.t("agent.regenerate")} className="p-1.5 rounded-md text-gray-400 hover:text-[#9181bd] hover:bg-[#f1edf8] dark:hover:bg-[#9181bd]/10 transition-colors" onClick={() => {
                               if (conversation && round) void regenerateAgentAssistantMessage(conversation.id, round.id);
                             }}>
                               <RefreshIcon className="w-4 h-4" />
                             </AgentActionButton>
-                            <AgentActionButton tooltip={allRoundTasksFavorited ? '编辑收藏夹' : '收藏所有图片'} className={`p-1.5 rounded-md transition-colors ${hasRoundFavoriteTasks ? (allRoundTasksFavorited ? 'text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-500/10' : 'text-gray-400 hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-500/10') : 'text-gray-300 dark:text-gray-600 opacity-50 cursor-not-allowed'}`} disabled={!hasRoundFavoriteTasks} onClick={() => {
+                            <AgentActionButton tooltip={allRoundTasksFavorited ? i18n.t("upstreamSync.editCollections") : i18n.t("agent.favoriteAll")} className={`p-1.5 rounded-md transition-colors ${hasRoundFavoriteTasks ? (allRoundTasksFavorited ? 'text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-500/10' : 'text-gray-400 hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-500/10') : 'text-gray-300 dark:text-gray-600 opacity-50 cursor-not-allowed'}`} disabled={!hasRoundFavoriteTasks} onClick={() => {
                               if (!hasRoundFavoriteTasks) return;
                               openFavoritePicker(favoriteTasksForRound.map((task) => task.id));
                             }}>
                               <FavoriteIcon className="w-4 h-4" filled={allRoundTasksFavorited} />
                             </AgentActionButton>
-                            <AgentActionButton tooltip={t('agent.downloadAll')} className={`p-1.5 rounded-md transition-colors ${roundTasks.length > 0 ? 'text-gray-400 hover:text-green-500 hover:bg-green-50 dark:hover:bg-green-500/10' : 'text-gray-300 dark:text-gray-600 opacity-50 cursor-not-allowed'}`} disabled={roundTasks.length === 0} onClick={async () => {
+                            <AgentActionButton tooltip={t('agent.downloadAll')} className={`p-1.5 rounded-md transition-colors ${hasRoundTasks ? 'text-gray-400 hover:text-green-500 hover:bg-green-50 dark:hover:bg-green-500/10' : 'text-gray-300 dark:text-gray-600 opacity-50 cursor-not-allowed'}`} disabled={!hasRoundTasks} onClick={async () => {
                                const imageIds = tasksForRound.flatMap(t => t.outputImages || []);
                                if (imageIds.length === 0) return;
                                try {
@@ -1261,20 +1071,20 @@ export default function AgentWorkspace() {
                                     ? await downloadImageEntriesAsZip(getImageZipEntries(imageIds, fileNameBase), fileNameBase)
                                     : await downloadImageIds(imageIds, fileNameBase);
                                  if (successCount === 0) {
-                                   useStore.getState().showToast('下载失败', 'error');
+                                   useStore.getState().showToast(i18n.t("contextMenu.downloadFailed"), 'error');
                                  } else if (failCount > 0) {
                                    useStore.getState().showToast('部分下载失败：成功 ' + successCount + '，失败 ' + failCount, 'error');
                                  } else {
-                                   useStore.getState().showToast(successCount > 1 ? '下载成功：' + successCount + ' 张图片' : '下载成功', 'success');
+                                   useStore.getState().showToast(successCount > 1 ? '下载成功：' + successCount + ' 张图片' : i18n.t("contextMenu.downloadSuccess"), 'success');
                                  }
                                } catch (err) {
                                  console.error(err);
-                                 useStore.getState().showToast('下载失败', 'error');
+                                 useStore.getState().showToast(i18n.t("contextMenu.downloadFailed"), 'error');
                                }
                              }}>
                                <DownloadIcon className="w-4 h-4" />
                              </AgentActionButton>
-                            <AgentActionButton tooltip="删除消息" className="p-1.5 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-md transition-colors" onClick={() => {
+                            <AgentActionButton tooltip={i18n.t("agent.deleteMessageTooltip")} className="p-1.5 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-md transition-colors" onClick={() => {
                               if (round) handleDeleteMessage(message, round);
                             }}>
                               <TrashIcon className="w-4 h-4" />
@@ -1282,17 +1092,17 @@ export default function AgentWorkspace() {
                           </>
                         ) : (
                           <>
-                            <AgentActionButton tooltip="复制提示词" className="p-1.5 rounded-md hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-white/[0.04] transition-colors" onClick={() => {
+                            <AgentActionButton tooltip={i18n.t("agent.copyPrompt")} className="p-1.5 rounded-md hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-white/[0.04] transition-colors" onClick={() => {
                               void handleCopyMessage(message.content);
                             }}>
                               <CopyIcon className="w-4 h-4" />
                             </AgentActionButton>
-                            <AgentActionButton tooltip="编辑" className="p-1.5 rounded-md hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-white/[0.04] transition-colors" onClick={() => {
+                            <AgentActionButton tooltip={i18n.t("contextMenu.edit")} className="p-1.5 rounded-md hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-200/50 dark:hover:bg-white/[0.04] transition-colors" onClick={() => {
                                if (round) void handleEditRoundMessage(round, message.content);
                             }}>
                               <EditIcon className="w-4 h-4" />
                             </AgentActionButton>
-                            <AgentActionButton tooltip="删除" className="p-1.5 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-md transition-colors" onClick={() => {
+                            <AgentActionButton tooltip={i18n.t("history.delete")} className="p-1.5 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-md transition-colors" onClick={() => {
                               if (round) handleDeleteMessage(message, round);
                             }}>
                               <TrashIcon className="w-4 h-4" />
@@ -1318,11 +1128,11 @@ export default function AgentWorkspace() {
                     <div key={`running-${round.id}`} className="flex w-full justify-start mb-6">
                       <article className="flex min-w-[16rem] max-w-[95%] flex-col rounded-2xl rounded-tl-sm border border-gray-200 bg-white/70 p-4 dark:border-white/[0.08] dark:bg-white/[0.03] md:max-w-[85%] lg:max-w-[75%]">
                         <div className="mb-2 text-sm text-gray-500 dark:text-gray-400">
-                          <span className="text-blue-600 dark:text-blue-400 font-semibold">Agent</span> <span className="ml-1 font-normal opacity-60">· 第 {round.index} 轮</span>
+                          <span className="text-[#7e6aa9] dark:text-[#a28fc9] font-semibold">Agent</span> <span className="ml-1 font-normal opacity-60">{i18n.t("upstreamSync.roundNumber", { count: round.index })}</span>
                         </div>
                         <div className="flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
                           <span className="inline-flex items-center gap-1.5">
-                            <span>正在生成回复</span>
+                            <span>{i18n.t("agent.generatingResponse")}</span>
                             <span className="flex gap-1">
                               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
                               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current [animation-delay:150ms]" />
@@ -1345,7 +1155,7 @@ export default function AgentWorkspace() {
           className={`fixed bottom-[calc(var(--input-bar-clearance,12rem)+1.5rem)] left-1/2 -translate-x-1/2 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-white/90 backdrop-blur shadow-[0_2px_12px_rgba(0,0,0,0.1)] border border-gray-200/50 text-gray-500 transition-all duration-300 hover:bg-gray-50 hover:text-gray-800 dark:border-white/[0.08] dark:bg-gray-800/90 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200 ${
             !isScrolledToBottom && activeMessages.length > 0 ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0 pointer-events-none'
           }`}
-          aria-label="滚动到底部"
+          aria-label={i18n.t("agent.scrollToBottom")}
         >
           <ArrowDownIcon className="h-5 w-5" />
         </button>

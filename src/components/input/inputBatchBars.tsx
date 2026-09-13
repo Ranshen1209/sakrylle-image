@@ -86,7 +86,7 @@ export default function InputBatchBars({
           <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
           <BatchActionButton
             onClick={onSelectAllVisibleFavoriteCollections}
-            className="p-2 text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
+            className="p-2 text-[#9181bd] dark:text-[#a28fc9] hover:text-[#7e6aa9] dark:hover:text-[#b9a9da] transition-colors"
             tooltip="全选收藏夹"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
@@ -146,7 +146,7 @@ export default function InputBatchBars({
         <div className="w-px h-5 bg-gray-200 dark:bg-white/20 mx-1"></div>
         <BatchActionButton
           onClick={onSelectAllVisibleTasks}
-          className="p-2 text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 transition-colors"
+          className="p-2 text-[#9181bd] dark:text-[#a28fc9] hover:text-[#7e6aa9] dark:hover:text-[#b9a9da] transition-colors"
           tooltip="全选任务"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">

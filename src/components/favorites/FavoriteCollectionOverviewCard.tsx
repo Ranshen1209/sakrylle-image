@@ -1,6 +1,7 @@
+import i18n from '../../lib/i18n'
 import { useEffect, useRef, useState, type SVGProps } from 'react'
 import type { TaskRecord, FavoriteCollection } from '../../types'
-import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../../store'
+import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../../lib/imageCache'
 import { TooltipButton as FavoriteActionButton } from '../TooltipButton'
 import { EditIcon, FavoriteIcon, TrashIcon } from '../icons'
 import type { CollectionCard } from './favoriteUtils'
@@ -192,7 +193,7 @@ export function FavoriteCollectionOverviewCard({
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
-      : 'bg-blue-500'
+      : 'bg-[#9181bd]'
     : 'bg-gray-200 dark:bg-gray-700'
 
   return (
@@ -208,7 +209,7 @@ export function FavoriteCollectionOverviewCard({
       </div>
       <article
         ref={cardRef}
-        className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer touch-pan-y will-change-transform duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${!isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'} ${isSelected ? 'border-blue-500 shadow-md ring-2 ring-blue-500/50' : 'border-gray-200 dark:border-white/[0.08] hover:border-gray-300 dark:hover:border-white/[0.18]'}`}
+        className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer touch-pan-y will-change-transform duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${!isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'} ${isSelected ? 'border-[#9181bd] shadow-md ring-2 ring-[#9181bd]/50' : 'border-gray-200 dark:border-white/[0.08] hover:border-gray-300 dark:hover:border-white/[0.18]'}`}
         onClick={(e) => {
           if (Date.now() < suppressClickUntilRef.current || Date.now() < suppressSwipeClickUntilRef.current) {
             e.preventDefault()
@@ -239,7 +240,7 @@ export function FavoriteCollectionOverviewCard({
                 {editingId === card.id ? (
                   <input
                     type="text"
-                    className="h-6 min-w-0 flex-1 rounded border border-blue-400/50 bg-white px-1.5 py-0 text-[14px] leading-6 text-gray-900 shadow-sm outline-none focus:border-blue-500 dark:border-white/20 dark:bg-black/20 dark:text-white dark:focus:border-white/40"
+                    className="h-6 min-w-0 flex-1 rounded border border-[#a28fc9]/50 bg-white px-1.5 py-0 text-[14px] leading-6 text-gray-900 shadow-sm outline-none focus:border-[#9181bd] dark:border-white/20 dark:bg-black/20 dark:text-white dark:focus:border-white/40"
                     value={editingName}
                     onChange={(e) => setEditingName(e.target.value)}
                     onKeyDown={handleRenameKeyDown}
@@ -251,13 +252,13 @@ export function FavoriteCollectionOverviewCard({
                   <span className="truncate" title={card.name}>{card.name}</span>
                 )}
               </div>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">{card.tasks.length} 条任务</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">{card.tasks.length} {i18n.t("upstreamSync.tasks")}</p>
             </div>
             <div className="mt-auto flex items-center justify-end gap-1">
               {!isVirtualAll && card.collection && (
                 <>
                   <FavoriteActionButton
-                    tooltip={isDefault ? '取消默认收藏夹' : '设为默认收藏夹'}
+                    tooltip={isDefault ? i18n.t("upstreamSync.unsetDefaultCollection") : i18n.t("upstreamSync.setAsDefaultCollection")}
                     onClick={(e) => {
                       e.stopPropagation()
                       handleSetDefault(card.collection!)
@@ -268,7 +269,7 @@ export function FavoriteCollectionOverviewCard({
                   </FavoriteActionButton>
                   {editingId === card.id ? (
                     <FavoriteActionButton
-                      tooltip="确认"
+                      tooltip={i18n.t("history.confirm")}
                       onMouseDown={(e) => {
                         e.preventDefault()
                         e.stopPropagation()
@@ -282,7 +283,7 @@ export function FavoriteCollectionOverviewCard({
                     </FavoriteActionButton>
                   ) : (
                     <FavoriteActionButton
-                      tooltip="编辑名称"
+                      tooltip={i18n.t("upstreamSync.editName")}
                       onClick={(e) => startRename(e, card.collection!)}
                       className="p-1.5 rounded-md hover:bg-green-50 dark:hover:bg-green-950/30 text-gray-400 hover:text-green-500 transition"
                     >
@@ -290,7 +291,7 @@ export function FavoriteCollectionOverviewCard({
                     </FavoriteActionButton>
                   )}
                   <FavoriteActionButton
-                    tooltip={canDelete ? '删除收藏夹' : '至少保留一个收藏夹'}
+                    tooltip={canDelete ? i18n.t("upstreamSync.deleteCollection") : i18n.t("upstreamSync.keepAtLeastOneCollection")}
                     disabled={!canDelete}
                     onClick={(e) => {
                       e.stopPropagation()

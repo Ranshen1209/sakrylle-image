@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next'
+import i18n from '../../lib/i18n'
 import type { AppSettings } from '../../types'
 import Select from '../Select'
 
@@ -16,11 +18,12 @@ export default function GeneralSettingsTab({
   onOpenZipDownloadRouteManager,
   toggleTaskCompletionNotification,
 }: GeneralSettingsTabProps) {
+  useTranslation()
   return (
     <div className="space-y-4">
       <div className="hidden sm:block">
         <div className="mb-1 flex items-center justify-between">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">任务提交方式</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("settings.general.submitMode")}</span>
           <div className="w-28 shrink-0">
             <Select
               value={draft.enterSubmit ? 'enter' : 'ctrl-enter'}
@@ -34,75 +37,55 @@ export default function GeneralSettingsTab({
           </div>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          选择 {navigator.userAgent.includes('Mac') ? '⌘ + Enter' : 'Ctrl + Enter'} 时，Enter 换行；选择 Enter 时，Shift + Enter 换行。
+          {i18n.t("upstreamSync.choose")} {navigator.userAgent.includes('Mac') ? '⌘ + Enter' : 'Ctrl + Enter'} {i18n.t("upstreamSync.forEnterToInsertANewlineWithEnter")}
         </div>
       </div>
       <div className="sm:hidden">
         <div className="mb-1 flex items-center justify-between gap-3">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">任务提交方式</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("settings.general.submitMode")}</span>
           <div className="w-28 shrink-0">
             <Select
               value={draft.enterSubmit ? 'enter' : 'button'}
               onChange={(val) => commitSettings({ ...draft, enterSubmit: val === 'enter' })}
               options={[
-                { label: '发送按钮', value: 'button' },
-                { label: '回车/发送按钮', value: 'enter' }
+                { label: i18n.t("upstreamSync.sendButton"), value: 'button' },
+                { label: i18n.t("upstreamSync.enterSendButton"), value: 'enter' }
               ]}
               className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
             />
           </div>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          选择回车/发送按钮时，回车可提交；否则仅使用发送按钮提交。
+          {i18n.t("upstreamSync.chooseEnterSendButtonToSubmitWithEnter")}
         </div>
       </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">提交任务后清空输入框</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("settings.general.clearInputAfterSubmit")}</span>
           <button
             type="button"
             onClick={() => commitSettings({ ...draft, clearInputAfterSubmit: !draft.clearInputAfterSubmit })}
             className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.clearInputAfterSubmit ? 'bg-[#9181bd]' : 'bg-gray-300 dark:bg-gray-600'}`}
             role="switch"
             aria-checked={draft.clearInputAfterSubmit}
-            aria-label="提交任务后清空输入框"
+            aria-label={i18n.t("settings.general.clearInputAfterSubmit")}
           >
             <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.clearInputAfterSubmit ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
           </button>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          开启后，提交成功创建任务时会清空提示词和参考图。
+          {i18n.t("settings.general.clearInputAfterSubmitHint")}
         </div>
       </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between gap-3">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">参考图编辑按钮</span>
-          <div className="w-28 shrink-0">
-            <Select
-              value={draft.referenceImageEditAction}
-              onChange={(val) => commitSettings({ ...draft, referenceImageEditAction: val as AppSettings['referenceImageEditAction'] })}
-              options={[
-                { label: '询问', value: 'ask' },
-                { label: '替换参考图', value: 'replace-reference' },
-                { label: '添加遮罩', value: 'add-mask' },
-              ]}
-              className="w-full px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm text-gray-700 dark:text-gray-200 outline-none"
-            />
-          </div>
-        </div>
-        <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          控制未添加遮罩的参考图点击编辑按钮时，是每次询问、直接替换参考图，还是直接添加遮罩。
-        </div>
-      </div>
-      <div className="block">
-        <div className="mb-1 flex items-center justify-between gap-3">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">使用压缩包进行的批量下载途径</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("upstreamSync.downloadRoutesUsingZipArchives")}</span>
           <button
             type="button"
             onClick={onOpenZipDownloadRouteManager}
             className="shrink-0 rounded-xl border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 hover:text-gray-900 dark:border-white/[0.08] dark:bg-white/[0.05] dark:text-gray-300 dark:hover:bg-white/[0.08] dark:hover:text-white"
           >
-            管理
+            {i18n.t("upstreamSync.manage")}
           </button>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
@@ -111,128 +94,128 @@ export default function GeneralSettingsTab({
       </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">重启后加载上次的输入框</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("settings.general.persistInputOnRestart")}</span>
           <button
             type="button"
             onClick={() => commitSettings({ ...draft, persistInputOnRestart: !draft.persistInputOnRestart })}
             className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.persistInputOnRestart ? 'bg-[#9181bd]' : 'bg-gray-300 dark:bg-gray-600'}`}
             role="switch"
             aria-checked={draft.persistInputOnRestart}
-            aria-label="重启后加载上次的输入框"
+            aria-label={i18n.t("settings.general.persistInputOnRestart")}
           >
             <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.persistInputOnRestart ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
           </button>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          关闭后，不再持久化提示词和参考图，下次启动会使用空输入框。
+          {i18n.t("settings.general.persistInputOnRestartHint")}
         </div>
       </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">复用配置时临时复用该任务的 API 配置</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("settings.general.reuseTaskApiProfileTemporarily")}</span>
           <button
             type="button"
             onClick={() => commitSettings({ ...draft, reuseTaskApiProfileTemporarily: !draft.reuseTaskApiProfileTemporarily })}
             className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.reuseTaskApiProfileTemporarily ? 'bg-[#9181bd]' : 'bg-gray-300 dark:bg-gray-600'}`}
             role="switch"
             aria-checked={draft.reuseTaskApiProfileTemporarily}
-            aria-label="复用配置时临时复用该任务的 API 配置"
+            aria-label={i18n.t("settings.general.reuseTaskApiProfileTemporarily")}
           >
             <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.reuseTaskApiProfileTemporarily ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
           </button>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          开启后，复用历史任务时会临时使用该任务的 API 配置，找不到该配置时提交会提示；关闭后，会继续使用当前的 API 配置。
+          {i18n.t("settings.general.reuseTaskApiProfileTemporarilyHint")}
         </div>
       </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">成功任务仍然展示重试按钮</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("settings.general.alwaysShowRetryButton")}</span>
           <button
             type="button"
             onClick={() => commitSettings({ ...draft, alwaysShowRetryButton: !draft.alwaysShowRetryButton })}
             className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.alwaysShowRetryButton ? 'bg-[#9181bd]' : 'bg-gray-300 dark:bg-gray-600'}`}
             role="switch"
             aria-checked={draft.alwaysShowRetryButton}
-            aria-label="成功任务仍然展示重试按钮"
+            aria-label={i18n.t("settings.general.alwaysShowRetryButton")}
           >
             <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.alwaysShowRetryButton ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
           </button>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          开启后，即使任务成功生成，也会在任务卡片和详情页显示重试按钮。
+          {i18n.t("settings.general.alwaysShowRetryButtonHint")}
         </div>
       </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">允许模型改写优化提示词</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("upstreamSync.allowPromptRewriting")}</span>
           <button
             type="button"
             onClick={() => commitSettings({ ...draft, allowPromptRewrite: !draft.allowPromptRewrite })}
             className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.allowPromptRewrite ? 'bg-[#9181bd]' : 'bg-gray-300 dark:bg-gray-600'}`}
             role="switch"
             aria-checked={draft.allowPromptRewrite}
-            aria-label="允许模型改写优化提示词"
+            aria-label={i18n.t("upstreamSync.allowPromptRewriting")}
           >
             <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.allowPromptRewrite ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
           </button>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          开启后，Codex CLI 兼容模式下的 Image API 请求和所有 Responses API 请求都不再附加防改写提示词，允许模型按服务商策略优化提示词。
+          {i18n.t("upstreamSync.allowsProvidersToOptimizePromptsByOmittingThe")}
         </div>
       </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">任务完成后发送系统通知</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("upstreamSync.notifyWhenTasksFinish")}</span>
           <button
             type="button"
             onClick={() => { void toggleTaskCompletionNotification() }}
             className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.taskCompletionNotification ? 'bg-[#9181bd]' : 'bg-gray-300 dark:bg-gray-600'}`}
             role="switch"
             aria-checked={draft.taskCompletionNotification}
-            aria-label="任务完成后发送系统通知"
+            aria-label={i18n.t("upstreamSync.notifyWhenTasksFinish")}
           >
             <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.taskCompletionNotification ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
           </button>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          开启后，画廊模式图像生成完成、Agent 模式回复结束时，会发送浏览器系统通知。浏览器可能会请求通知权限或默认拒绝，请查看相关提示。
+          {i18n.t("upstreamSync.sendsBrowserNotificationsWhenGalleryGenerationOrAn")}
         </div>
       </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">发送消息后自动滚动到底部</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("settings.general.agentScrollToBottomAfterSubmit")}</span>
           <button
             type="button"
             onClick={() => commitSettings({ ...draft, agentScrollToBottomAfterSubmit: !draft.agentScrollToBottomAfterSubmit })}
             className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.agentScrollToBottomAfterSubmit ? 'bg-[#9181bd]' : 'bg-gray-300 dark:bg-gray-600'}`}
             role="switch"
             aria-checked={draft.agentScrollToBottomAfterSubmit}
-            aria-label="发送消息后自动滚动到底部"
+            aria-label={i18n.t("settings.general.agentScrollToBottomAfterSubmit")}
           >
             <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentScrollToBottomAfterSubmit ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
           </button>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          开启后，在 Agent 模式发送消息成功后会自动滚动到对话底部。
+          {i18n.t("settings.general.agentScrollToBottomAfterSubmitHint")}
         </div>
       </div>
       <div className="block">
         <div className="mb-1 flex items-center justify-between">
-          <span className="block text-sm text-gray-600 dark:text-gray-300">公式输出提示</span>
+          <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("upstreamSync.mathFormattingInstructions")}</span>
           <button
             type="button"
             onClick={() => commitSettings({ ...draft, agentMathFormattingPrompt: !draft.agentMathFormattingPrompt })}
             className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${draft.agentMathFormattingPrompt ? 'bg-[#9181bd]' : 'bg-gray-300 dark:bg-gray-600'}`}
             role="switch"
             aria-checked={draft.agentMathFormattingPrompt}
-            aria-label="公式输出提示"
+            aria-label={i18n.t("upstreamSync.mathFormattingInstructions")}
           >
             <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${draft.agentMathFormattingPrompt ? 'translate-x-[14px]' : 'translate-x-[2px]'}`} />
           </button>
         </div>
         <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-          开启后，Agent 会被要求使用 <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[0.9em] text-gray-700 dark:bg-white/10 dark:text-gray-200">$...$</code> 和 <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[0.9em] text-gray-700 dark:bg-white/10 dark:text-gray-200">$$...$$</code> 输出数学公式，确保渲染效果正常。
+          {i18n.t("upstreamSync.askTheAgentToUse")} <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[0.9em] text-gray-700 dark:bg-white/10 dark:text-gray-200">$...$</code> {i18n.t("upstreamSync.and")} <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[0.9em] text-gray-700 dark:bg-white/10 dark:text-gray-200">$$...$$</code> {i18n.t("upstreamSync.forCorrectlyRenderedMath")}
         </div>
       </div>
     </div>

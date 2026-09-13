@@ -1,11 +1,12 @@
+import i18n from '../../lib/i18n'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { TaskRecord, FavoriteCollection } from '../../types'
 import {
-  ALL_FAVORITES_COLLECTION_ID,
   deleteFavoriteCollection,
   renameFavoriteCollection,
   useStore,
 } from '../../store'
+import { ALL_FAVORITES_COLLECTION_ID } from '../../lib/favoriteState'
 import { useDragSelect } from '../../hooks/useDragSelect'
 import { FavoriteIcon } from '../icons'
 import { FavoriteCollectionOverviewCard } from './FavoriteCollectionOverviewCard'
@@ -27,17 +28,17 @@ export function FavoriteCollectionsView() {
   const suppressClickUntilRef = useRef(0)
   
   const cards = useMemo<CollectionCard[]>(() => {
-    const allTasks = getCollectionTasks(ALL_FAVORITES_COLLECTION_ID, tasks)
+    const allTasks = getCollectionTasks(ALL_FAVORITES_COLLECTION_ID, tasks, defaultFavoriteCollectionId)
     return [
-      { id: ALL_FAVORITES_COLLECTION_ID, name: '全部', tasks: allTasks },
+      { id: ALL_FAVORITES_COLLECTION_ID, name: i18n.t("upstreamSync.all"), tasks: allTasks },
       ...collections.map((collection) => ({
         id: collection.id,
         name: collection.name,
         collection,
-        tasks: getCollectionTasks(collection.id, tasks),
+        tasks: getCollectionTasks(collection.id, tasks, defaultFavoriteCollectionId),
       })),
     ]
-  }, [collections, tasks])
+  }, [collections, defaultFavoriteCollectionId, tasks])
 
   const filteredCards = useMemo(() => {
     if (!searchQuery.trim()) return cards
@@ -88,11 +89,11 @@ export function FavoriteCollectionsView() {
     if (collections.length <= 1) return
     const imageCount = new Set(collectionTasks.flatMap((task) => task.outputImages || [])).size
     setConfirmDialog({
-      title: '删除收藏夹',
-      message: `确定要删除收藏夹「${collection.name}」吗？`,
+      title: i18n.t("upstreamSync.deleteCollection"),
+      message: i18n.t('upstreamSync.message24', { value0: collection.name }),
       checkbox: imageCount > 0
         ? {
-            label: `同时删除收藏夹中的图片（${imageCount} 张）`,
+            label: i18n.t('upstreamSync.message25', { value0: imageCount }),
             tone: 'danger',
           }
         : undefined,
@@ -113,8 +114,8 @@ export function FavoriteCollectionsView() {
       return
     }
     setConfirmDialog({
-      title: '修改默认收藏夹',
-      message: `确定要将默认收藏夹从「${current.name}」改为「${collection.name}」吗？`,
+      title: i18n.t("upstreamSync.changeDefaultCollection"),
+      message: i18n.t('upstreamSync.message26', { value0: current.name, value1: collection.name }),
       action: () => setDefaultFavoriteCollectionId(collection.id),
     })
   }
@@ -124,7 +125,7 @@ export function FavoriteCollectionsView() {
       {filteredCards.length === 0 ? (
         <div className="py-32 text-center text-gray-400 dark:text-gray-500">
           <FavoriteIcon className="mx-auto mb-4 h-12 w-12 text-gray-300 dark:text-gray-600" />
-          <p className="text-sm">{cards.length === 0 ? '还没有收藏的图片' : '没有找到匹配的收藏夹'}</p>
+          <p className="text-sm">{cards.length === 0 ? i18n.t("upstreamSync.noFavoriteImagesYet") : i18n.t("upstreamSync.noMatchingCollections")}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 pb-10">
@@ -165,7 +166,7 @@ export function FavoriteCollectionsView() {
       )}
       {selectionBox && (
         <div
-          className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
+          className="fixed bg-[#9181bd]/20 border border-[#9181bd]/50 pointer-events-none z-[30]"
           style={{
             left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
             top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,

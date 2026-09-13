@@ -179,14 +179,18 @@ If changing default API literals, update matching test assertions.
 
 ## Release And Deployment
 
-- Production currently runs on the Tokyo Docker host (`tokyo-server`) via
-  `/opt/stack/docker-compose.yml`.
-- Production service: `gpt-image-playground`.
-- Production image:
-  `ghcr.io/ranshen1209/gpt_image_playground:latest`.
-- To deploy production, push `theme/sakrylle`, run the GitHub Actions
-  `docker.yml` workflow with `workflow_dispatch`, then on `tokyo-server` run:
-  `cd /opt/stack && docker compose pull gpt-image-playground && docker compose up -d gpt-image-playground`.
+- Production runs on the Los Angeles Docker host `sakrylle-la`, reached via
+  `ssh-sakrylle`; Tokyo is retired. Compose: `/opt/stack/docker-compose.yml`.
+- Existing service/container: `gpt-image-playground`; repository:
+  `ghcr.io/ranshen1209/gpt_image_playground`. Pin deployments by digest.
+- Nginx route: `/opt/stack/nginx/conf.d/sakrylle-image.conf`, forwarding to
+  `http://gpt-image-playground:80`; preserve the shared TLS/edge configuration.
+- Push `theme/sakrylle`, manually dispatch `docker.yml`, verify its head SHA,
+  successful tests and release-provenance artifact, then deploy that digest.
+- Back up Compose/configuration on the server before changing only this service.
+  Validate with `sudo docker compose config --quiet`, then pull and run
+  `sudo docker compose up -d --no-deps gpt-image-playground` in `/opt/stack`.
+- See `docs/production.md` for verification and rollback requirements.
 - `npm run deploy:cf` deploys to Cloudflare via Wrangler and requires
   `CLOUDFLARE_API_TOKEN`; do not treat it as the production Docker path unless
   hosting changes.

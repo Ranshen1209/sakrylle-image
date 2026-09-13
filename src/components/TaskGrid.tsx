@@ -1,5 +1,7 @@
+import i18n from '../lib/i18n'
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds, useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { useStore, reuseConfig, editOutputs, removeTask, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
+import { ALL_FAVORITES_COLLECTION_ID, getTaskFavoriteCollectionIds } from '../lib/favoriteState'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -8,6 +10,7 @@ export default function TaskGrid() {
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const activeFavoriteCollectionId = useStore((s) => s.activeFavoriteCollectionId)
+  const defaultFavoriteCollectionId = useStore((s) => s.defaultFavoriteCollectionId)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
@@ -36,17 +39,17 @@ export default function TaskGrid() {
     return sorted.filter((t) => {
       if (filterFavorite) {
         if (!t.isFavorite) return false
-        if (activeFavoriteCollectionId && activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(t).includes(activeFavoriteCollectionId)) return false
+        if (activeFavoriteCollectionId && activeFavoriteCollectionId !== ALL_FAVORITES_COLLECTION_ID && !getTaskFavoriteCollectionIds(t, defaultFavoriteCollectionId).includes(activeFavoriteCollectionId)) return false
       }
       if (!taskMatchesFilterStatus(t, filterStatus)) return false
       return taskMatchesSearchQuery(t, q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, activeFavoriteCollectionId, defaultFavoriteCollectionId])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
-      title: '删除任务',
-      message: '确定要删除这个任务吗？关联的图片资源也会被清理（如果没有其他任务引用）。',
+      title: i18n.t("upstreamSync.deleteTask"),
+      message: i18n.t("upstreamSync.deleteThisTaskImagesWillAlsoBeRemoved"),
       action: () => removeTask(task),
     })
   }
@@ -229,7 +232,7 @@ export default function TaskGrid() {
       if (now - lastToastTimeRef.current > 3000) {
         lastToastTimeRef.current = now
         const keyName = isMac ? '⌘' : 'Ctrl'
-        useStore.getState().showToast(`松开 ${keyName} 键使用滚轮，或拖至边缘自动滚动`, 'info')
+        useStore.getState().showToast(i18n.t('upstreamSync.message20', { value0: keyName }), 'info')
       }
     }
 
@@ -256,7 +259,7 @@ export default function TaskGrid() {
     return (
       <div className="text-center py-20 text-gray-400 dark:text-gray-500">
         {searchQuery || filterFavorite ? (
-          <p className="text-sm">没有找到匹配的任务</p>
+          <p className="text-sm">{i18n.t("upstreamSync.noMatchingTasks")}</p>
         ) : (
           <>
             <svg
@@ -272,7 +275,7 @@ export default function TaskGrid() {
                 d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
               />
             </svg>
-            <p className="text-sm">输入提示词开始生成图片</p>
+            <p className="text-sm">{i18n.t("tasks.emptyHint")}</p>
           </>
         )}
       </div>
@@ -314,7 +317,7 @@ export default function TaskGrid() {
       </div>
       {selectionBox && (
         <div
-          className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
+          className="fixed bg-[#9181bd]/20 border border-[#9181bd]/50 pointer-events-none z-[30]"
           style={{
             left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
             top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,

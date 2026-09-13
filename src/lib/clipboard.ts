@@ -1,3 +1,4 @@
+import i18n from './i18n'
 export async function copyTextToClipboard(text: string) {
   let asyncClipboardError: unknown = null
 
@@ -16,7 +17,7 @@ export async function copyTextToClipboard(text: string) {
 }
 
 export async function copyImageSourceToClipboard(src: string | Promise<string | undefined>) {
-  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+  if (!canCopyImageToClipboard()) {
     throw new Error('Clipboard image API is not available')
   }
 
@@ -27,13 +28,17 @@ export async function copyImageSourceToClipboard(src: string | Promise<string | 
   await writeImageBlobToClipboard(blob)
 }
 
+export function canCopyImageToClipboard() {
+  return window.isSecureContext && Boolean(navigator.clipboard?.write) && typeof ClipboardItem !== 'undefined'
+}
+
 export function getClipboardFailureMessage(fallback: string, err: unknown) {
   if (isEmbeddedPage() && isClipboardPermissionError(err)) {
-    return '复制失败：内嵌页面未授予剪贴板权限'
+    return i18n.t("errors.clipboardEmbedded")
   }
 
-  if (err instanceof Error && err.message.startsWith('当前浏览器不支持')) {
-    return `复制失败：${err.message}`
+  if (err instanceof Error && err.message.startsWith(i18n.t("upstreamSync.unsupportedByThisBrowser"))) {
+    return i18n.t('upstreamSync.message39', { value0: err.message })
   }
 
   return fallback
@@ -77,7 +82,7 @@ async function writeImageBlobToClipboard(blob: Blob) {
   }
 
   if (Object.keys(clipboardItems).length === 0) {
-    throw new Error('当前浏览器不支持图像剪贴板写入')
+    throw new Error(i18n.t("errors.clipboardUnsupported"))
   }
 
   await navigator.clipboard.write([

@@ -1,7 +1,8 @@
+import i18n from './i18n'
 import { zipSync } from 'fflate'
 import type { TaskRecord } from '../types'
-import { ensureImageCached } from '../store'
 import { getNumberedFileNameBase, sanitizeFileNamePart } from './exportFileName'
+import { ensureImageCached } from './imageCache'
 
 const MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -109,7 +110,7 @@ async function getImageBlob(imageIdOrUrl: string): Promise<Blob> {
   }
 
   const res = await fetch(src)
-  if (!res.ok && !src.startsWith('data:')) throw new Error(`读取图片失败：${imageIdOrUrl}`)
+  if (!res.ok && !src.startsWith('data:')) throw new Error(i18n.t('upstreamSync.message40', { value0: imageIdOrUrl }))
   return await res.blob()
 }
 

@@ -1,14 +1,15 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useStore, addImageFromUrl, ensureImageCached } from '../store'
-import { copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
+import { useStore, addImageFromUrl } from '../store'
+import { canCopyImageToClipboard, copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getImageZipEntries } from '../lib/downloadImages'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
+import { ensureImageCached } from '../lib/imageCache'
 import { CopyIcon, DownloadIcon, EditIcon } from './icons'
 
 export default function ImageContextMenu() {
   const { t } = useTranslation()
-  const [menuInfo, setMenuInfo] = useState<{ src: string; imageId?: string; outputImageIds: string[]; x: number; y: number } | null>(null)
+  const [menuInfo, setMenuInfo] = useState<{ src: string; imageId?: string; outputImageIds: string[]; canCopyImage: boolean; x: number; y: number } | null>(null)
   const showToast = useStore((s) => s.showToast)
   const inputImages = useStore((s) => s.inputImages)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
@@ -31,11 +32,16 @@ export default function ImageContextMenu() {
         const isTouch = window.matchMedia('(pointer: coarse)').matches
         if (isIOS && isTouch) return
 
+        const canCopyImage = canCopyImageToClipboard()
+        // 非安全上下文没有图片剪贴板 API；原图区域放行原生菜单，缩略图仍保留下载/编辑能力。
+        if (!canCopyImage && imgTarget.classList.contains('object-contain')) return
+
         e.preventDefault()
         setMenuInfo({
           src: imgTarget.src,
           imageId: imgTarget.dataset.imageId,
           outputImageIds: imgTarget.dataset.outputImageIds?.split(',').filter(Boolean) ?? [],
+          canCopyImage,
           x: e.clientX,
           y: e.clientY,
         })
@@ -191,7 +197,8 @@ export default function ImageContextMenu() {
   let top = menuInfo.y
   const MENU_WIDTH = 120
   const showDownloadAll = menuInfo.outputImageIds.length > 1
-  const MENU_HEIGHT = showDownloadAll ? 160 : 128
+  const menuItemCount = (menuInfo.canCopyImage ? 1 : 0) + 1 + (showDownloadAll ? 1 : 0) + 1
+  const MENU_HEIGHT = menuItemCount * 32 + 32
 
   if (left + MENU_WIDTH > window.innerWidth) {
     left -= MENU_WIDTH
@@ -207,13 +214,15 @@ export default function ImageContextMenu() {
       style={{ left, top }}
       onContextMenu={(e) => e.preventDefault()}
     >
-      <button
-        onClick={handleCopy}
-        className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
-      >
-        <CopyIcon className="w-4 h-4 flex-shrink-0" />
-        {t('contextMenu.copy')}
-      </button>
+      {menuInfo.canCopyImage && (
+        <button
+          onClick={handleCopy}
+          className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"
+        >
+          <CopyIcon className="w-4 h-4 flex-shrink-0" />
+          {t('contextMenu.copy')}
+        </button>
+      )}
       <button
         onClick={handleDownload}
         className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50 flex items-center gap-2 transition-colors"

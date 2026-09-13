@@ -79,7 +79,7 @@ export default function SupportPromptModal() {
             {t('support.sponsor')}
           </a>
           <a
-            href="https://github.com/Ranshen1209/gpt_image_playground/issues"
+            href="https://github.com/Ranshen1209/sakrylle-image/issues"
             target="_blank"
             rel="noopener noreferrer"
             onClick={dismissSupportPrompt}

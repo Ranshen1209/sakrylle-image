@@ -13,18 +13,21 @@ import {
   getApiErrorMessage,
   getDataUrlDecodedByteSize,
   getDataUrlEncodedByteSize,
+  getResponsesImageResultBase64,
   isDataUrl,
   isHttpUrl,
   mergeActualParams,
+  maybeAppendTransparentBackgroundHint,
   MIME_MAP,
   normalizeBase64Image,
   pickActualParams,
+  PROMPT_REWRITE_GUARD_PREFIX,
 } from './imageApiShared'
-import { canUseChatCompletionsImagePath, resolveBearerToken } from './oauthFallback'
+import { canUseChatCompletionsImagePath, canUseOAuthForProfile, resolveBearerToken } from './oauthFallback'
 import { getSakrylleImageRequestParams } from './sakrylleImageSize'
 import { callImagesApiViaChat } from './chatCompletionsImageApi'
 
-export const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
+export { PROMPT_REWRITE_GUARD_PREFIX } from './imageApiShared'
 
 const IMAGES_GENERATION_PATH = 'images/generations'
 const IMAGES_EDIT_PATH = 'images/edits'
@@ -36,6 +39,10 @@ function isSakrylleApiBaseUrl(baseUrl: string): boolean {
     return baseUrl.toLowerCase().includes('api.sakrylle.com')
   }
 }
+export { readJsonServerSentEvents } from './serverSentEvents'
+import { DEFAULT_IMAGES_MODEL, getImageGenerationModel } from './imageModels'
+import { isEventStreamResponse, readJsonServerSentEvents } from './serverSentEvents'
+import { prependCodexCliSizePrompt } from './size'
 
 function getStreamPartialImages(profile: ApiProfile): number {
   return profile.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES
@@ -44,14 +51,14 @@ function getStreamPartialImages(profile: ApiProfile): number {
 export function shouldUseChatImagePath(profile: ApiProfile): boolean {
   return profile.provider === 'openai' &&
     profile.apiMode === 'images' &&
+    profile.model === DEFAULT_IMAGES_MODEL &&
     !profile.codexCli &&
     profile.streamChatCompletionsImage === true &&
     isSakrylleApiBaseUrl(profile.baseUrl)
 }
 
-/** 并发拆分子请求的最大同时在飞数。生产反馈显示贴近 api.sakrylle.com 单用户并发墙运行
- *  仍容易出现部分失败；保守留出余量，让重试/补发更稳定。 */
-const MAX_CONCURRENT_IMAGE_REQUESTS = 3
+/** Sakrylle single-image requests share a fixed six-request concurrency limit. */
+const MAX_CONCURRENT_IMAGE_REQUESTS = 6
 /** 可重试错误的重试次数 */
 const IMAGE_REQUEST_MAX_RETRIES = 1
 /** 重试前的退避时长（毫秒） */
@@ -268,13 +275,10 @@ function normalizeImageApiPayload(value: unknown): ImageApiResponse {
 }
 
 async function createRequestHeaders(profile: ApiProfile): Promise<Record<string, string>> {
+  if (!profile.apiKey.trim() && !canUseOAuthForProfile(profile)) return {}
   return {
     Authorization: `Bearer ${await resolveBearerToken(profile)}`,
   }
-}
-
-function isEventStreamResponse(response: Response): boolean {
-  return response.headers.get('Content-Type')?.toLowerCase().includes('text/event-stream') ?? false
 }
 
 export function isRecordValue(value: unknown): value is Record<string, unknown> {
@@ -291,7 +295,7 @@ export function getNumberValue(source: Record<string, unknown>, key: string): nu
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function getStreamEventErrorMessage(event: Record<string, unknown>): string | null {
+export function getStreamEventErrorMessage(event: Record<string, unknown>): string | null {
   const error = event.error
   if (isRecordValue(error)) {
     const message = getStringValue(error, 'message')
@@ -306,96 +310,24 @@ function getStreamEventErrorMessage(event: Record<string, unknown>): string | nu
   return null
 }
 
-function parseServerSentEventBlock(block: string): string | null {
-  const dataLines: string[] = []
-  for (const line of block.split(/\r?\n/)) {
-    if (!line || line.startsWith(':')) continue
-    if (!line.startsWith('data:')) continue
-    dataLines.push(line.slice(5).replace(/^ /, ''))
-  }
-
-  const data = dataLines.join('\n').trim()
-  if (!data || data === '[DONE]') return null
-  return data
-}
-
-export async function readJsonServerSentEvents(
-  response: Response,
-  onEvent: (event: Record<string, unknown>) => void | Promise<void>,
-  signal?: AbortSignal,
-): Promise<void> {
-  if (!response.body) throw new Error(i18n.t('errors.imagesStreamNoBody'))
-
-  const reader = response.body.getReader()
-
-  // When the caller's AbortSignal fires (e.g. idle-timeout or overall-timeout)
-  // cancel the reader so the pending reader.read() rejects immediately rather
-  // than hanging until the next network chunk arrives.
-  const onAbort = () => { reader.cancel().catch(() => {}) }
-  signal?.addEventListener('abort', onAbort, { once: true })
-
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let hasDataLine = false
-
-  const processBlock = async (block: string) => {
-    if (block.split(/\r?\n/).some((line) => line.startsWith('data:'))) hasDataLine = true
-    const data = parseServerSentEventBlock(block)
-    if (!data) return
-
-    let event: unknown
-    try {
-      event = JSON.parse(data)
-    } catch {
-      throw new Error(appendStreamingFormatHint(data))
-    }
-    if (!isRecordValue(event)) return
-
-    const errorMessage = getStreamEventErrorMessage(event)
-    if (errorMessage) throw new Error(errorMessage)
-
-    await onEvent(event)
-  }
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read()
-      // If the reader was cancelled because the AbortSignal fired, throw so
-      // the caller's catch block (which holds the named timeout error) takes over.
-      if (signal?.aborted) throw new DOMException('AbortError', 'AbortError')
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      let separatorIndex = buffer.search(/\r?\n\r?\n/)
-      while (separatorIndex >= 0) {
-        const block = buffer.slice(0, separatorIndex)
-        const separator = buffer.match(/\r?\n\r?\n/)?.[0] ?? '\n\n'
-        buffer = buffer.slice(separatorIndex + separator.length)
-        await processBlock(block)
-        separatorIndex = buffer.search(/\r?\n\r?\n/)
-      }
-    }
-  } finally {
-    signal?.removeEventListener('abort', onAbort)
-  }
-
-  buffer += decoder.decode()
-  if (buffer.trim()) await processBlock(buffer)
-  if (!hasDataLine) throw new Error(appendStreamingFormatHint('未从流式响应中解析到有效的 data 事件'))
-}
-
 function createResponsesImageTool(
   params: TaskParams,
   isEdit: boolean,
   profile: ApiProfile,
   maskDataUrl?: string,
+  nativeTransparentBackground?: boolean,
 ): Record<string, unknown> {
   const tool: Record<string, unknown> = {
     type: 'image_generation',
     action: isEdit ? 'edit' : 'generate',
-    size: params.size,
     output_format: params.output_format,
     moderation: params.moderation,
+  }
+  const imageModel = getImageGenerationModel(profile)
+  if (imageModel) tool.model = imageModel
+
+  if (!profile.codexCli) {
+    tool.size = params.size
   }
 
   if (profile.streamImages) {
@@ -408,6 +340,10 @@ function createResponsesImageTool(
 
   if (params.output_format !== 'png' && params.output_compression != null) {
     tool.output_compression = params.output_compression
+  }
+
+  if (nativeTransparentBackground) {
+    tool.background = 'transparent'
   }
 
   if (maskDataUrl) {
@@ -473,24 +409,6 @@ function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime:
   return results
 }
 
-function getResponsesImageResultBase64(result: ResponsesOutputItem['result']): string | undefined {
-  const b64 = typeof result === 'string'
-    ? result
-    : result && typeof result === 'object'
-    ? typeof result.b64_json === 'string'
-      ? result.b64_json
-      : typeof result.base64 === 'string'
-      ? result.base64
-      : typeof result.image === 'string'
-      ? result.image
-      : typeof result.data === 'string'
-      ? result.data
-      : ''
-    : ''
-
-  return b64.trim() ? b64 : undefined
-}
-
 async function parseImagesApiResponse(payload: ImageApiResponse, mime: string, signal?: AbortSignal): Promise<CallApiResult> {
   const data = payload.data
   if (!Array.isArray(data) || !data.length) {
@@ -544,6 +462,7 @@ async function parseImagesApiResponse(payload: ImageApiResponse, mime: string, s
 function eventToImageResponseItem(event: Record<string, unknown>): ImageResponseItem {
   return {
     b64_json: getStringValue(event, 'b64_json'),
+    url: getStringValue(event, 'url'),
     revised_prompt: getStringValue(event, 'revised_prompt'),
     size: getStringValue(event, 'size'),
     quality: getStringValue(event, 'quality'),
@@ -557,6 +476,7 @@ async function parseImagesApiStreamResponse(
   response: Response,
   mime: string,
   onPartialImage?: CallApiOptions['onPartialImage'],
+  signal?: AbortSignal,
 ): Promise<CallApiResult> {
   const completedItems: ImageResponseItem[] = []
   let resultPayload: ImageApiResponse | null = null
@@ -583,6 +503,10 @@ async function parseImagesApiStreamResponse(
     if (type === 'image_generation.completed' || type === 'image_edit.completed') {
       completedItems.push(eventToImageResponseItem(event))
     }
+  }, {
+    signals: [signal],
+    formatErrorMessage: appendStreamingFormatHint,
+    getEventErrorMessage: getStreamEventErrorMessage,
   })
 
   if (resultPayload) {
@@ -593,10 +517,24 @@ async function parseImagesApiStreamResponse(
     throw new Error(i18n.t('errors.imagesStreamNoFinal'))
   }
 
-  const images = completedItems
-    .map((item) => item.b64_json)
-    .filter((b64): b64 is string => Boolean(b64))
-    .map((b64) => normalizeBase64Image(b64, mime))
+  const images: string[] = []
+  const rawImageUrls = completedItems.map((item) => item.url).filter(isHttpUrl)
+  try {
+    for (const item of completedItems) {
+      if (item.b64_json) {
+        images.push(normalizeBase64Image(item.b64_json, mime))
+        continue
+      }
+      if (isHttpUrl(item.url) || isDataUrl(item.url)) {
+        images.push(await fetchImageUrlAsDataUrl(item.url, mime, signal))
+      }
+    }
+  } catch (err) {
+    if (rawImageUrls.length > 0 && err instanceof Error) {
+      (err as any).rawImageUrls = rawImageUrls
+    }
+    throw err
+  }
   if (!images.length) throw new Error(i18n.t('errors.imagesStreamNoUsable'))
 
   const actualParamsList = completedItems.map((item) => mergeActualParams(pickActualParams(item)))
@@ -609,6 +547,7 @@ async function parseImagesApiStreamResponse(
     actualParams,
     actualParamsList,
     revisedPrompts: completedItems.map((item) => item.revised_prompt),
+    ...(rawImageUrls.length ? { rawImageUrls } : {}),
   }
 }
 
@@ -654,6 +593,9 @@ async function parseResponsesApiStreamResponse(
     }
 
     completedPayload = payload
+  }, {
+    formatErrorMessage: appendStreamingFormatHint,
+    getEventErrorMessage: getStreamEventErrorMessage,
   })
 
   const payload = completedPayload ?? (outputItems.length ? { output: outputItems } : null)
@@ -678,6 +620,12 @@ async function parseResponsesApiStreamResponse(
 
 export async function callOpenAICompatibleImageApi(opts: CallApiOptions, profile: ApiProfile, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
   if (customProvider) {
+    const n = opts.params.n > 0 ? opts.params.n : 1
+    const submitMapping = opts.inputImageDataUrls.length > 0 && customProvider.editSubmit
+      ? customProvider.editSubmit
+      : customProvider.submit
+    const isAsync = Boolean(submitMapping.taskIdPath)
+    if (profile.codexCli && n > 1 && !isAsync) return callCustomHttpImageApiConcurrent(opts, profile, customProvider, n)
     return callCustomHttpImageApi(opts, profile, customProvider)
   }
 
@@ -688,7 +636,7 @@ export async function callOpenAICompatibleImageApi(opts: CallApiOptions, profile
 
 async function callImagesApi(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const n = opts.params.n > 0 ? opts.params.n : 1
-  if ((profile.codexCli || (profile.streamImages && n > 1)) && n > 1) {
+  if ((profile.codexCli || profile.streamImages || isSakrylleApiBaseUrl(profile.baseUrl)) && n > 1) {
     return callImagesApiConcurrent(opts, profile, n)
   }
 
@@ -801,15 +749,16 @@ async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile
 async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
-  if (!useApiProxy && shouldUseChatImagePath(profile) && await canUseChatCompletionsImagePath(profile)) {
+  if (paramsForNativeBackground(opts) && !useApiProxy && shouldUseChatImagePath(profile) && await canUseChatCompletionsImagePath(profile)) {
     return callImagesApiViaChat(opts, profile)
   }
 
   const { prompt: originalPrompt, inputImageDataUrls } = opts
   const params = getSakrylleImageRequestParams(opts.params, profile)
+  const sizePrompt = profile.codexCli && !opts.skipCodexCliSizePrompt ? prependCodexCliSizePrompt(originalPrompt, params.size) : originalPrompt
   const prompt = profile.codexCli && !opts.settings.allowPromptRewrite
-    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${originalPrompt}`
-    : originalPrompt
+    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${sizePrompt}`
+    : sizePrompt
   const isEdit = inputImageDataUrls.length > 0
   const shouldStreamImages = profile.streamImages && !(isEdit && isSakrylleApiBaseUrl(profile.baseUrl))
   const mime = MIME_MAP[params.output_format] || 'image/png'
@@ -825,9 +774,14 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): P
       const formData = new FormData()
       formData.append('model', profile.model)
       formData.append('prompt', prompt)
-      formData.append('size', params.size)
+      if (!profile.codexCli) {
+        formData.append('size', params.size)
+      }
       formData.append('output_format', params.output_format)
       formData.append('moderation', params.moderation)
+      if (opts.nativeTransparentBackground) {
+        formData.append('background', 'transparent')
+      }
 
       if (!profile.codexCli) {
         formData.append('quality', params.quality)
@@ -886,9 +840,16 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): P
       const body: Record<string, unknown> = {
         model: profile.model,
         prompt,
-        size: params.size,
         output_format: params.output_format,
         moderation: params.moderation,
+      }
+
+      if (opts.nativeTransparentBackground) {
+        body.background = 'transparent'
+      }
+
+      if (!profile.codexCli) {
+        body.size = params.size
       }
 
       if (!profile.codexCli) {
@@ -926,7 +887,7 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): P
     }
 
     if (shouldStreamImages && isEventStreamResponse(response)) {
-      return parseImagesApiStreamResponse(response, mime, opts.onPartialImage)
+      return parseImagesApiStreamResponse(response, mime, opts.onPartialImage, controller.signal)
     }
 
     return parseImagesApiResponse(await response.json() as ImageApiResponse, mime, controller.signal)
@@ -990,10 +951,22 @@ function resolveTemplateValue(value: unknown, context: Record<string, unknown>):
 }
 
 function createCustomProviderContext(opts: CallApiOptions, profile: ApiProfile) {
+  const sizePrompt = profile.codexCli && !opts.skipCodexCliSizePrompt
+    ? prependCodexCliSizePrompt(opts.prompt, opts.params.size)
+    : opts.prompt
+  const prompt = profile.codexCli && !opts.settings.allowPromptRewrite
+    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${sizePrompt}`
+    : sizePrompt
+  const params = {
+    ...opts.params,
+    ...(profile.codexCli ? { size: undefined, quality: undefined } : {}),
+    ...(opts.nativeTransparentBackground ? { background: 'transparent' } : {}),
+  }
+
   return {
     profile,
-    prompt: opts.prompt,
-    params: opts.params,
+    prompt,
+    params,
     inputImages: {
       dataUrls: opts.inputImageDataUrls.length ? opts.inputImageDataUrls : undefined,
       count: opts.inputImageDataUrls.length,
@@ -1039,8 +1012,8 @@ async function createCustomMultipartBody(mapping: CustomProviderSubmitMapping, o
   }
   const maskBlob = needsMask && opts.maskDataUrl ? await maskDataUrlToPngBlob(opts.maskDataUrl) : null
   if (opts.maskDataUrl && (needsInputImages || needsMask)) {
-    assertMaskEditFileSize('遮罩主图文件', imageBlobs[0]?.size ?? 0)
-    assertMaskEditFileSize('遮罩文件', maskBlob?.size ?? 0)
+    assertMaskEditFileSize(i18n.t("errors.maskMainFile"), imageBlobs[0]?.size ?? 0)
+    assertMaskEditFileSize(i18n.t("errors.maskFile"), maskBlob?.size ?? 0)
   }
   assertImageInputPayloadSize(imageBlobs.reduce((sum, blob) => sum + blob.size, 0) + (maskBlob?.size ?? 0))
 
@@ -1082,7 +1055,7 @@ async function extractCustomImages(payload: unknown, result: CustomProviderResul
   }
 
   if (!images.length) {
-    const err = new Error('接口没有返回可识别的图片数据，请查看原始响应内容确认接口实际返回的数据结构，并根据 API 文档调整「自定义服务商」配置中的结果提取路径。')
+    const err = new Error(i18n.t("upstreamSync.noRecognizableImageDataInspectTheRawResponse"))
     ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
     throw err
   }
@@ -1127,7 +1100,10 @@ async function submitCustomRequest(mapping: CustomProviderSubmitMapping, opts: C
     signal: controller.signal,
   })
 
-  if (!response.ok) throw new Error(await getApiErrorMessage(response))
+  if (!response.ok) {
+    const errorMessage = await getApiErrorMessage(response)
+    throw new Error(maybeAppendStreamingHint(errorMessage, response.status, profile.streamImages))
+  }
   return response.json()
 }
 
@@ -1175,7 +1151,8 @@ async function pollCustomTaskResult(
     const state = getTaskState(taskPayload, poll)
     if (state === 'failure') {
       const message = getByPath(taskPayload, poll.errorPath) || getByPath(taskPayload, 'message') || getByPath(taskPayload, 'data.fail_reason') || getByPath(taskPayload, 'error.message')
-      throw new Error(typeof message === 'string' && message.trim() ? message : '异步任务失败')
+      const errorMessage = typeof message === 'string' && message.trim() ? message : i18n.t("upstreamSync.asyncTaskFailed")
+      throw new Error(maybeAppendTransparentBackgroundHint(errorMessage))
     }
     if (state === 'success') {
       try {
@@ -1194,7 +1171,7 @@ export async function getCustomQueuedImageResult(
   taskId: string,
   params: TaskParams,
 ): Promise<CallApiResult> {
-  if (!customProvider.poll) throw new Error('自定义异步任务缺少 poll 配置')
+  if (!customProvider.poll) throw new Error(i18n.t("upstreamSync.missingCustomAsyncPollConfiguration"))
   const mime = MIME_MAP[params.output_format] || 'image/png'
   return pollCustomTaskResult(profile, customProvider.poll, taskId, mime)
 }
@@ -1211,21 +1188,21 @@ async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiProfile,
     const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
     const submitMapping = isEdit && customProvider.editSubmit ? customProvider.editSubmit : customProvider.submit
     if (useApiProxy && (submitMapping.method ?? 'POST') !== 'POST') {
-      throw new Error('API 代理暂不支持使用 GET 提交的自定义服务商。请关闭 API 代理，或改用 POST 提交的自定义服务商配置。')
+      throw new Error(i18n.t("upstreamSync.theApiProxyDoesNotSupportCustomGet"))
     }
     if (useApiProxy && (submitMapping.taskIdPath || customProvider.poll)) {
-      throw new Error('API 代理暂不支持使用异步任务的自定义服务商。请关闭 API 代理，或改用同步返回图片的自定义服务商配置。')
+      throw new Error(i18n.t("upstreamSync.theApiProxyDoesNotSupportAsyncCustom"))
     }
     const submitPayload = await submitCustomRequest(submitMapping, opts, profile, controller, proxyConfig, useApiProxy)
     const taskIdValue = submitMapping.taskIdPath ? getByPath(submitPayload, submitMapping.taskIdPath) : undefined
     const taskId = typeof taskIdValue === 'string' ? taskIdValue.trim() : String(taskIdValue ?? '').trim()
     if (submitMapping.taskIdPath && !taskId) {
-      const err = new Error('无法从响应中提取异步任务 ID，请查看原始响应内容确认接口实际返回的数据结构，并根据 API 文档调整「自定义服务商」配置中的 taskIdPath。')
+      const err = new Error(i18n.t("upstreamSync.cannotExtractTheAsyncTaskIdInspectThe"))
       ;(err as any).rawResponsePayload = JSON.stringify(submitPayload, null, 2)
       throw err
     }
     if (!taskId) return extractCustomImages(submitPayload, submitMapping.result ?? {}, mime, controller.signal)
-    if (!customProvider.poll) throw new Error('异步接口返回了 task_id，但服务商配置缺少 poll')
+    if (!customProvider.poll) throw new Error(i18n.t("upstreamSync.theAsyncApiReturnedTaskIdButThe"))
     opts.onCustomTaskEnqueued?.({ taskId })
     if (timeoutId) {
       clearTimeout(timeoutId)
@@ -1235,6 +1212,50 @@ async function callCustomHttpImageApi(opts: CallApiOptions, profile: ApiProfile,
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
   }
+}
+
+function mergeConcurrentApiResults(results: PromiseSettledResult<CallApiResult>[]): CallApiResult {
+  const successfulResults = results
+    .filter((result): result is PromiseFulfilledResult<CallApiResult> => result.status === 'fulfilled')
+    .map((result) => result.value)
+  if (!successfulResults.length) {
+    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')!
+    throw firstError.reason
+  }
+
+  const images = successfulResults.flatMap((result) => result.images)
+  const actualParamsList = successfulResults.flatMap((result) =>
+    result.actualParamsList?.length ? result.actualParamsList : result.images.map(() => result.actualParams),
+  )
+  const revisedPrompts = successfulResults.flatMap((result) =>
+    result.revisedPrompts?.length ? result.revisedPrompts : result.images.map(() => undefined),
+  )
+  const rawImageUrls = successfulResults.flatMap((result) => result.rawImageUrls ?? [])
+  const failedRequests = results.flatMap((result, requestIndex) =>
+    result.status === 'rejected' ? [{ requestIndex, error: getErrorMessage(result.reason) }] : [],
+  )
+
+  return {
+    images,
+    actualParams: mergeActualParams(successfulResults[0].actualParams ?? {}, { n: images.length }),
+    actualParamsList,
+    revisedPrompts,
+    ...(rawImageUrls.length ? { rawImageUrls } : {}),
+    ...(failedRequests.length ? { failedRequests } : {}),
+  }
+}
+
+async function callCustomHttpImageApiConcurrent(
+  opts: CallApiOptions,
+  profile: ApiProfile,
+  customProvider: CustomProviderDefinition,
+  n: number,
+): Promise<CallApiResult> {
+  const results = await Promise.allSettled(Array.from({ length: n }).map(() => callCustomHttpImageApi({
+    ...opts,
+    params: { ...opts.params, n: 1 },
+  }, profile, customProvider)))
+  return mergeConcurrentApiResults(results)
 }
 
 async function callResponsesImageApi(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
@@ -1290,6 +1311,7 @@ async function callResponsesImageApi(opts: CallApiOptions, profile: ApiProfile):
 async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const { prompt, inputImageDataUrls } = opts
   const params = getSakrylleImageRequestParams(opts.params, profile)
+  const requestPrompt = profile.codexCli && !opts.skipCodexCliSizePrompt ? prependCodexCliSizePrompt(prompt, params.size) : prompt
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
@@ -1309,10 +1331,11 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
 
     const body: Record<string, unknown> = {
       model: profile.model,
-      input: createResponsesInput(prompt, inputImageDataUrls, opts.settings.allowPromptRewrite),
-      tools: [createResponsesImageTool(params, inputImageDataUrls.length > 0, profile, opts.maskDataUrl)],
+      input: createResponsesInput(requestPrompt, inputImageDataUrls, opts.settings.allowPromptRewrite),
+      tools: [createResponsesImageTool(params, inputImageDataUrls.length > 0, profile, opts.maskDataUrl, opts.nativeTransparentBackground)],
       tool_choice: 'required',
     }
+    if (profile.reasoningEffort) body.reasoning = { effort: profile.reasoningEffort }
     if (profile.streamImages) {
       body.stream = true
     }
@@ -1353,3 +1376,5 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
     clearTimeout(timeoutId)
   }
 }
+
+function paramsForNativeBackground(opts: CallApiOptions) { return !opts.nativeTransparentBackground }

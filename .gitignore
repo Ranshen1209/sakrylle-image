@@ -9,3 +9,5 @@ scripts/i18n_*.py
 docs/OAUTH_CLIENT_INTEGRATION.md
 .DS_Store
 .claude/
+.env.local
+.env.*.local

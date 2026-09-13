@@ -1,14 +1,15 @@
+import i18n from '../../lib/i18n'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { FavoriteCollection } from '../../types'
 import {
   createFavoriteCollection,
   deleteFavoriteCollection,
-  getTaskFavoriteCollectionIds,
   renameFavoriteCollection,
   updateTasksFavoriteCollections,
   useStore,
 } from '../../store'
+import { getTaskFavoriteCollectionIds } from '../../lib/favoriteState'
 import { useCloseOnEscape } from '../../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../../hooks/usePreventBackgroundScroll'
 import { Checkbox } from '../Checkbox'
@@ -274,14 +275,14 @@ export function FavoriteCollectionPickerModal() {
     e.preventDefault()
     e.stopPropagation()
     if (collections.length <= 1) return
-    const collectionTasks = tasks.filter(t => getTaskFavoriteCollectionIds(t).includes(collection.id))
+    const collectionTasks = tasks.filter(t => getTaskFavoriteCollectionIds(t, defaultFavoriteCollectionId).includes(collection.id))
     const imageCount = new Set(collectionTasks.flatMap((task) => task.outputImages || [])).size
     setConfirmDialog({
-      title: '删除收藏夹',
-      message: `确定要删除收藏夹「${collection.name}」吗？`,
+      title: i18n.t("upstreamSync.deleteCollection"),
+      message: i18n.t('upstreamSync.message21', { value0: collection.name }),
       checkbox: imageCount > 0
         ? {
-            label: `同时删除收藏夹中的图片（${imageCount} 张）`,
+            label: i18n.t('upstreamSync.message22', { value0: imageCount }),
             tone: 'danger',
           }
         : undefined,
@@ -304,8 +305,8 @@ export function FavoriteCollectionPickerModal() {
       return
     }
     setConfirmDialog({
-      title: '修改默认收藏夹',
-      message: `确定要将默认收藏夹从「${current.name}」改为「${collection.name}」吗？`,
+      title: i18n.t("upstreamSync.changeDefaultCollection"),
+      message: i18n.t('upstreamSync.message23', { value0: current.name, value1: collection.name }),
       action: () => setDefaultFavoriteCollectionId(collection.id),
     })
   }
@@ -315,28 +316,28 @@ export function FavoriteCollectionPickerModal() {
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-overlay-in" />
       <div ref={modalRef} className="relative z-10 flex max-h-[85vh] w-full max-w-[400px] flex-col overflow-hidden rounded-3xl bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] ring-1 ring-black/5 dark:ring-white/10 animate-modal-in" onClick={(e) => e.stopPropagation()}>
         <div className="px-6 pt-6 pb-4 shrink-0 relative border-b border-gray-100 dark:border-[#333]">
-          <FavoriteActionButton tooltip="关闭" onClick={closePicker} wrapperClassName="absolute right-5 top-5 inline-flex" className="shrink-0 rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200">
+          <FavoriteActionButton tooltip={i18n.t("support.closeAria")} onClick={closePicker} wrapperClassName="absolute right-5 top-5 inline-flex" className="shrink-0 rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200">
             <CloseIcon className="h-5 w-5" />
           </FavoriteActionButton>
           <h2 className="mb-2 pr-8 flex items-center gap-2.5 text-lg font-semibold text-gray-800 dark:text-gray-100 leading-snug">
             <FavoriteIcon filled className="h-5 w-5 shrink-0 text-yellow-500" />
-            保存到收藏夹
+            {i18n.t("upstreamSync.saveToCollections")}
           </h2>
           <p className="text-[13px] text-gray-500 dark:text-gray-400 leading-relaxed">
-            取消勾选会将任务从对应的收藏夹中移除。
+            {i18n.t("upstreamSync.uncheckingRemovesTheTaskFromThatCollection")}
           </p>
         </div>
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden pt-3 pb-1">
           <div className="flex items-center justify-between mb-1.5 px-6 shrink-0">
-            <span className="text-[13px] font-medium text-gray-500 dark:text-gray-400">选择要保存的收藏夹</span>
+            <span className="text-[13px] font-medium text-gray-500 dark:text-gray-400">{i18n.t("upstreamSync.chooseCollections")}</span>
             <div className="flex gap-4">
-              <button type="button" onClick={() => setCheckedIds(selectableCollections.map((collection) => collection.id))} className="text-[13px] font-medium text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300 transition-colors">全选</button>
-              <button type="button" onClick={() => setCheckedIds([])} className="text-[13px] font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 transition-colors">取消</button>
+              <button type="button" onClick={() => setCheckedIds(selectableCollections.map((collection) => collection.id))} className="text-[13px] font-medium text-[#9181bd] hover:text-[#7e6aa9] dark:text-[#a28fc9] dark:hover:text-[#b9a9da] transition-colors">{i18n.t("upstreamSync.selectAll")}</button>
+              <button type="button" onClick={() => setCheckedIds([])} className="text-[13px] font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 transition-colors">{i18n.t("size.cancel")}</button>
             </div>
           </div>
           <div className="flex-1 overflow-y-auto custom-scrollbar relative">
             {selectableCollections.length === 0 ? (
-              <div className="py-8 text-center text-sm text-gray-400 dark:text-gray-500">暂无收藏夹</div>
+              <div className="py-8 text-center text-sm text-gray-400 dark:text-gray-500">{i18n.t("upstreamSync.noCollectionsYet")}</div>
             ) : selectableCollections.map((collection) => {
               const isDefault = collection.id === defaultFavoriteCollectionId
               const canDelete = collections.length > 1
@@ -363,10 +364,10 @@ export function FavoriteCollectionPickerModal() {
                 onDrop={(e) => handleDrop(e, collection.id)}
               >
                 {dragOverId === collection.id && dragDropPosition === 'before' && draggedId !== collection.id && (
-                  <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 z-40 pointer-events-none" />
+                  <div className="absolute top-0 left-0 right-0 h-[2px] bg-[#9181bd] z-40 pointer-events-none" />
                 )}
                 {dragOverId === collection.id && dragDropPosition === 'after' && draggedId !== collection.id && (
-                  <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-40 pointer-events-none" />
+                  <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#9181bd] z-40 pointer-events-none" />
                 )}
                 <div className="flex h-12 cursor-pointer items-center flex-1 min-w-0 gap-3 pl-4 pr-3">
                   <div 
@@ -386,7 +387,7 @@ export function FavoriteCollectionPickerModal() {
                   {editingId === collection.id ? (
                     <input
                       type="text"
-                      className="h-6 min-w-0 flex-1 rounded border border-blue-400/50 bg-white px-1.5 py-0 text-[15px] leading-6 text-gray-900 shadow-sm outline-none focus:border-blue-500 dark:border-white/20 dark:bg-black/20 dark:text-white dark:focus:border-white/40"
+                      className="h-6 min-w-0 flex-1 rounded border border-[#a28fc9]/50 bg-white px-1.5 py-0 text-[15px] leading-6 text-gray-900 shadow-sm outline-none focus:border-[#9181bd] dark:border-white/20 dark:bg-black/20 dark:text-white dark:focus:border-white/40"
                       value={editingName}
                       onChange={(e) => setEditingName(e.target.value)}
                       onKeyDown={handleRenameKeyDown}
@@ -401,7 +402,7 @@ export function FavoriteCollectionPickerModal() {
                 <div className={`flex shrink-0 items-center justify-end gap-2 overflow-hidden pr-4 transition-all duration-150 ${editingId === collection.id ? 'w-12' : 'w-28'}`}>
                     {editingId === collection.id ? (
                       <FavoriteActionButton
-                        tooltip="确认"
+                        tooltip={i18n.t("history.confirm")}
                         onMouseDown={(e) => {
                           e.preventDefault()
                           e.stopPropagation()
@@ -415,9 +416,9 @@ export function FavoriteCollectionPickerModal() {
                       </FavoriteActionButton>
                     ) : (
                       <>
-                        <FavoriteActionButton tooltip={isDefault ? '取消默认收藏夹' : '设为默认收藏夹'} onClick={(e) => handleSetDefault(e, collection)} className={`p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md transition-colors ${isDefault ? 'text-yellow-500 dark:text-yellow-400' : 'text-gray-400 hover:text-yellow-500 dark:hover:text-yellow-400'}`}><FavoriteIcon filled={isDefault} className="w-3.5 h-3.5" /></FavoriteActionButton>
-                        <FavoriteActionButton tooltip="重命名" onClick={(e) => startRename(e, collection)} className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-gray-400 hover:text-gray-700 dark:hover:text-white transition-colors"><EditIcon className="w-3.5 h-3.5" /></FavoriteActionButton>
-                        <FavoriteActionButton tooltip={canDelete ? '删除' : '至少保留一个收藏夹'} disabled={!canDelete} onClick={(e) => handleDelete(e, collection)} className={`p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md transition-colors ${canDelete ? 'text-gray-400 hover:text-red-500 dark:hover:text-red-400' : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'}`}><TrashIcon className="w-3.5 h-3.5" /></FavoriteActionButton>
+                        <FavoriteActionButton tooltip={isDefault ? i18n.t("upstreamSync.unsetDefaultCollection") : i18n.t("upstreamSync.setAsDefaultCollection")} onClick={(e) => handleSetDefault(e, collection)} className={`p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md transition-colors ${isDefault ? 'text-yellow-500 dark:text-yellow-400' : 'text-gray-400 hover:text-yellow-500 dark:hover:text-yellow-400'}`}><FavoriteIcon filled={isDefault} className="w-3.5 h-3.5" /></FavoriteActionButton>
+                        <FavoriteActionButton tooltip={i18n.t("history.rename")} onClick={(e) => startRename(e, collection)} className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-gray-400 hover:text-gray-700 dark:hover:text-white transition-colors"><EditIcon className="w-3.5 h-3.5" /></FavoriteActionButton>
+                        <FavoriteActionButton tooltip={canDelete ? i18n.t("history.delete") : i18n.t("upstreamSync.keepAtLeastOneCollection")} disabled={!canDelete} onClick={(e) => handleDelete(e, collection)} className={`p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md transition-colors ${canDelete ? 'text-gray-400 hover:text-red-500 dark:hover:text-red-400' : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'}`}><TrashIcon className="w-3.5 h-3.5" /></FavoriteActionButton>
                       </>
                     )}
                   </div>
@@ -434,8 +435,8 @@ export function FavoriteCollectionPickerModal() {
                 if (event.key === 'Enter') handleCreate()
               }}
               type="text"
-              placeholder="新建收藏夹..."
-              className="min-w-0 flex-1 rounded-xl border border-gray-300 bg-transparent px-4 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-white/10 dark:text-white dark:focus:border-white/30 dark:focus:ring-white/30"
+              placeholder={i18n.t("upstreamSync.newCollection")}
+              className="min-w-0 flex-1 rounded-xl border border-gray-300 bg-transparent px-4 py-2 text-sm outline-none transition focus:border-[#9181bd] focus:ring-1 focus:ring-[#9181bd] dark:border-white/10 dark:text-white dark:focus:border-white/30 dark:focus:ring-white/30"
             />
             <button 
               type="button" 
@@ -443,12 +444,12 @@ export function FavoriteCollectionPickerModal() {
               disabled={!draft.trim()}
               className="inline-flex items-center justify-center rounded-xl bg-gray-200 px-5 py-2 text-sm font-medium text-gray-800 transition hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20"
             >
-              新建
+              {i18n.t("upstreamSync.create")}
             </button>
           </div>
           <div className="mt-5 flex gap-4">
-            <button type="button" onClick={closePicker} className="flex-1 rounded-xl border border-gray-200 bg-transparent px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors dark:border-white/10 dark:text-gray-200 dark:hover:bg-white/[0.04]">取消</button>
-            <button type="button" onClick={handleConfirm} className="flex-1 rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-600 transition-colors shadow-sm border border-transparent">确认</button>
+            <button type="button" onClick={closePicker} className="flex-1 rounded-xl border border-gray-200 bg-transparent px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors dark:border-white/10 dark:text-gray-200 dark:hover:bg-white/[0.04]">{i18n.t("size.cancel")}</button>
+            <button type="button" onClick={handleConfirm} className="flex-1 rounded-xl bg-[#9181bd] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#7e6aa9] transition-colors shadow-sm border border-transparent">{i18n.t("history.confirm")}</button>
           </div>
         </div>
       </div>

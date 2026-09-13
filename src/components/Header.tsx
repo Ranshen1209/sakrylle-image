@@ -169,7 +169,7 @@ export default function Header() {
                 <>
                   <span className="min-w-0 truncate whitespace-nowrap text-[17px] font-medium tracking-tight text-gray-800 dark:text-gray-100 sm:hidden" title={favoriteCollectionTitle}>{favoriteCollectionTitle}</span>
                   <a
-                    href="https://github.com/Ranshen1209/gpt_image_playground"
+                    href="https://github.com/Ranshen1209/sakrylle-image"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="group hidden min-w-0 items-center gap-2 sm:inline-flex"
@@ -185,7 +185,7 @@ export default function Header() {
                 </>
               ) : (
                 <a
-                  href="https://github.com/Ranshen1209/gpt_image_playground"
+                  href="https://github.com/Ranshen1209/sakrylle-image"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="group flex min-w-0 items-center gap-2"

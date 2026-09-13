@@ -1,5 +1,7 @@
-const CACHE_NAME = 'sakrylle-image-playground-v0.11.6'
+const CACHE_NAME = 'sakrylle-image-playground-v0.12.0'
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './favicon.png']
+const APP_SHELL_URLS = new Set(APP_SHELL.map((path) => new URL(path, self.registration.scope).href))
+const ASSETS_PATH = new URL('./assets/', self.registration.scope).pathname
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -37,6 +39,8 @@ self.addEventListener('fetch', (event) => {
     )
     return
   }
+
+  if (!APP_SHELL_URLS.has(url.href) && !url.pathname.startsWith(ASSETS_PATH)) return
 
   event.respondWith(
     caches.match(request).then((cached) => {

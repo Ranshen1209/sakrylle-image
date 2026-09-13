@@ -1,3 +1,5 @@
+import { persistAssistantStatus, persistErrorMessage } from './agentSentinels'
+import i18n from './i18n'
 import type { AgentConversation, TaskRecord, StoredImage, StoredImageThumbnail } from '../types'
 
 const DB_NAME = 'sakrylle-image-playground'
@@ -59,11 +61,28 @@ export function getAllTasks(): Promise<TaskRecord[]> {
 }
 
 export function putTask(task: TaskRecord): Promise<IDBValidKey> {
-  return dbTransaction(STORE_TASKS, 'readwrite', (s) => s.put(task))
+  return dbTransaction(STORE_TASKS, 'readwrite', (s) => s.put(persistTaskErrors(task)))
 }
 
 export function deleteTask(id: string): Promise<undefined> {
   return dbTransaction(STORE_TASKS, 'readwrite', (s) => s.delete(id))
+}
+
+export function commitTaskDeletion(deletedTaskIds: string[], updatedTasks: TaskRecord[], updatedConversations: AgentConversation[]): Promise<undefined> {
+  return openDB().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_TASKS, STORE_AGENT_CONVERSATIONS], 'readwrite')
+        const taskStore = tx.objectStore(STORE_TASKS)
+        const conversationStore = tx.objectStore(STORE_AGENT_CONVERSATIONS)
+        for (const id of deletedTaskIds) taskStore.delete(id)
+        for (const task of updatedTasks) taskStore.put(persistTaskErrors(task))
+        for (const conversation of updatedConversations) conversationStore.put(persistConversationErrors(conversation))
+        tx.oncomplete = () => resolve(undefined)
+        tx.onerror = () => reject(tx.error)
+        tx.onabort = () => reject(tx.error)
+      }),
+  )
 }
 
 export function clearTasks(): Promise<undefined> {
@@ -77,7 +96,7 @@ export function getAllAgentConversations(): Promise<AgentConversation[]> {
 }
 
 export function putAgentConversation(conversation: AgentConversation): Promise<IDBValidKey> {
-  return dbTransaction(STORE_AGENT_CONVERSATIONS, 'readwrite', (s) => s.put(conversation))
+  return dbTransaction(STORE_AGENT_CONVERSATIONS, 'readwrite', (s) => s.put(persistConversationErrors(conversation)))
 }
 
 export function clearAgentConversations(): Promise<undefined> {
@@ -91,7 +110,7 @@ export function replaceAgentConversations(conversations: AgentConversation[]): P
         const tx = db.transaction(STORE_AGENT_CONVERSATIONS, 'readwrite')
         const store = tx.objectStore(STORE_AGENT_CONVERSATIONS)
         store.clear()
-        for (const conversation of conversations) store.put(conversation)
+        for (const conversation of conversations) store.put(persistConversationErrors(conversation))
         tx.oncomplete = () => resolve(undefined)
         tx.onerror = () => reject(tx.error)
         tx.onabort = () => reject(tx.error)
@@ -295,7 +314,7 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image()
     image.onload = () => resolve(image)
-    image.onerror = () => reject(new Error('图片加载失败'))
+    image.onerror = () => reject(new Error(i18n.t("errors.imageLoadFailed")))
     image.src = dataUrl
   })
 }
@@ -304,14 +323,14 @@ async function createImageThumbnail(dataUrl: string): Promise<Omit<StoredImageTh
   const image = await loadImage(dataUrl)
   const width = image.naturalWidth
   const height = image.naturalHeight
-  if (width <= 0 || height <= 0) throw new Error('图片尺寸无效')
+  if (width <= 0 || height <= 0) throw new Error(i18n.t("errors.imageInvalidSize"))
 
   const scale = Math.min(1, THUMBNAIL_MAX_SIZE / Math.max(width, height))
   const canvas = document.createElement('canvas')
   canvas.width = Math.max(1, Math.round(width * scale))
   canvas.height = Math.max(1, Math.round(height * scale))
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('当前浏览器不支持 Canvas')
+  if (!ctx) throw new Error(i18n.t("mask.canvasUnsupported"))
   ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
 
   return {
@@ -328,4 +347,11 @@ async function safeCreateImageThumbnail(dataUrl: string): Promise<Partial<Omit<S
   } catch {
     return {}
   }
+}
+
+function persistTaskErrors(task: TaskRecord): TaskRecord {
+  return { ...task, error: persistErrorMessage(task.error), ...(task.outputErrors ? { outputErrors: task.outputErrors.map(item => ({ ...item, error: persistErrorMessage(item.error) ?? '' })) } : {}) }
+}
+function persistConversationErrors(conversation: AgentConversation): AgentConversation {
+  return { ...conversation, messages: conversation.messages.map(message => message.role === 'assistant' ? { ...message, content: persistAssistantStatus(message.content) } : message), rounds: conversation.rounds.map(round => ({ ...round, error: persistErrorMessage(round.error) })) }
 }

@@ -1,6 +1,8 @@
+import i18n from '../lib/i18n'
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react'
 import { removeMultipleTasks, useStore } from '../store'
 import type { AgentConversation } from '../types'
+import { getAgentConversationTaskIds, getConversationSearchText } from '../lib/agentConversationState'
 import { useTooltip } from '../hooks/useTooltip'
 import { CloseIcon, EditIcon, TrashIcon } from './icons'
 import ViewportTooltip from './ViewportTooltip'
@@ -55,10 +57,10 @@ function formatTime(value: number) {
   const dayOfWeek = now.getDay() || 7
   const startOfWeek = startOfToday - (dayOfWeek - 1) * 24 * 60 * 60 * 1000
   const time = date.getTime()
-  if (time >= startOfToday) return '今天'
-  if (time >= startOfYesterday) return '昨天'
-  if (time >= startOfWeek) return '本周'
-  return '更早'
+  if (time >= startOfToday) return i18n.t("history.today")
+  if (time >= startOfYesterday) return i18n.t("history.yesterday")
+  if (time >= startOfWeek) return i18n.t("history.thisWeek")
+  return i18n.t("history.earlier")
 }
 
 function formatDetailTime(value: number) {
@@ -74,14 +76,6 @@ function formatDetailTime(value: number) {
     hour12: false,
   })
   return formatter.format(date).replace(/\//g, '-')
-}
-
-function getConversationSearchText(conversation: AgentConversation) {
-  return [
-    conversation.title,
-    ...conversation.messages.map((message) => message.content),
-    ...conversation.rounds.map((round) => round.prompt),
-  ].join('\n').toLocaleLowerCase()
 }
 
 type HistoryModalProps = {
@@ -164,14 +158,7 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
   const handleDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
     const targetConversation = conversations.find((item) => item.id === id) ?? null
-    const roundIds = new Set(targetConversation?.rounds.map((round) => round.id) ?? [])
-    const roundTaskIds = targetConversation?.rounds.flatMap((round) => round.outputTaskIds) ?? []
-    const relatedTasks = tasks.filter((task) =>
-      task.agentConversationId === id || Boolean(task.agentRoundId && roundIds.has(task.agentRoundId)),
-    )
-    const existingTaskIds = new Set(tasks.map((task) => task.id))
-    const relatedTaskIds = Array.from(new Set([...roundTaskIds, ...relatedTasks.map((task) => task.id)]))
-      .filter((taskId) => existingTaskIds.has(taskId))
+    const relatedTaskIds = getAgentConversationTaskIds(targetConversation, tasks)
     const relatedTaskIdSet = new Set(relatedTaskIds)
     const generatedImageCount = new Set(
       tasks
@@ -180,17 +167,19 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
     ).size
 
     setConfirmDialog({
-      title: '删除对话',
-      message: '确定要删除这个 Agent 对话吗？',
-      checkbox: generatedImageCount > 0
+      title: i18n.t("history.deleteConversationTitle"),
+      message: i18n.t("history.deleteConversationMessage"),
+      checkbox: relatedTaskIds.length > 0
         ? {
-            label: `同时删除对话中生成的图片（${generatedImageCount} 张）`,
+            label: generatedImageCount > 0
+              ? i18n.t('upstreamSync.message5', { value0: generatedImageCount })
+              : i18n.t('upstreamSync.message6', { value0: relatedTaskIds.length }),
             tone: 'danger',
           }
         : undefined,
       action: async (deleteGeneratedImages = false) => {
-        deleteConversation(id)
         if (deleteGeneratedImages && relatedTaskIds.length > 0) await removeMultipleTasks(relatedTaskIds)
+        deleteConversation(id)
         if (conversations.length <= 1) {
           onClose()
         }
@@ -225,33 +214,33 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
   }
 
   return (
-    <div 
+    <div
       ref={modalRef}
       className="absolute top-12 left-0 w-80 sm:w-96 max-w-[calc(100vw-2rem)] max-h-[70vh] bg-white dark:bg-[#1c1c1e] rounded-xl shadow-2xl overflow-hidden flex flex-col border border-gray-200 dark:border-white/10 z-50 text-gray-900 dark:text-gray-200 animate-dropdown-down"
     >
       <div className="flex items-center justify-between p-3 border-b border-gray-200 dark:border-white/10 shrink-0">
-        <input 
-          type="text" 
-          placeholder="搜索聊天..." 
+        <input
+          type="text"
+          placeholder={i18n.t("history.searchPlaceholder")}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="flex-1 bg-transparent border-none outline-none text-sm px-2 text-gray-900 dark:text-white placeholder-gray-400"
         />
-        <HistoryActionButton tooltip="关闭" onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg text-gray-500 dark:text-gray-400 transition-colors">
+        <HistoryActionButton tooltip={i18n.t("support.closeAria")} onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg text-gray-500 dark:text-gray-400 transition-colors">
           <CloseIcon className="w-4 h-4" />
         </HistoryActionButton>
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-1 overscroll-contain">
         {filteredConversations.length === 0 && (
-          <div className="px-3 py-8 text-center text-sm text-gray-500">没有找到匹配的聊天</div>
+          <div className="px-3 py-8 text-center text-sm text-gray-500">{i18n.t("history.noResults")}</div>
         )}
 
         {Object.entries(groups).map(([label, items]) => (
           <div key={label}>
             <div className="mt-4 mb-1 px-3 text-xs font-medium text-gray-500">{label}</div>
             {items.map(c => (
-              <div 
-                key={c.id} 
+              <div
+                key={c.id}
                 className="group flex h-14 items-center justify-between gap-2 rounded-lg px-3 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors cursor-pointer"
                 onClick={() => handleSelect(c.id)}
               >
@@ -262,7 +251,7 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
                   {editingId === c.id ? (
                     <input
                       type="text"
-                      className="h-7 flex-1 bg-white dark:bg-black/20 border border-blue-400/50 dark:border-white/20 rounded px-1.5 py-0 text-sm leading-7 outline-none text-gray-900 dark:text-white focus:border-blue-500 dark:focus:border-white/40 shadow-sm min-w-0"
+                      className="h-7 flex-1 bg-white dark:bg-black/20 border border-[#a28fc9]/50 dark:border-white/20 rounded px-1.5 py-0 text-sm leading-7 outline-none text-gray-900 dark:text-white focus:border-[#9181bd] dark:focus:border-white/40 shadow-sm min-w-0"
                       value={editingTitle}
                       onChange={(e) => setEditingTitle(e.target.value)}
                       onKeyDown={handleRenameKeyDown}
@@ -284,7 +273,7 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
                 <div className={`flex shrink-0 items-center justify-end gap-1 overflow-hidden transition-all duration-150 ${editingId === c.id ? 'w-7 opacity-100' : 'w-0 opacity-0 group-hover:w-16 group-hover:opacity-100 group-focus-within:w-16 group-focus-within:opacity-100'}`}>
                   {editingId === c.id ? (
                     <HistoryActionButton
-                      tooltip="确认"
+                      tooltip={i18n.t("history.confirm")}
                       onClick={(e) => e.stopPropagation()}
                       onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); confirmRename() }}
                       className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-green-500 dark:text-green-400 hover:text-green-600 dark:hover:text-green-300 transition-colors"
@@ -296,7 +285,7 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
                   ) : (
                     <>
                       <HistoryActionButton
-                        tooltip="重命名"
+                        tooltip={i18n.t("history.rename")}
                         onClick={(e) => startRename(e, c.id, c.title)}
                         className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-gray-400 hover:text-gray-700 dark:hover:text-white disabled:text-gray-300 disabled:hover:text-gray-300 dark:disabled:text-gray-600 dark:disabled:hover:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
                         disabled={Boolean(agentGeneratingTitleIds[c.id])}
@@ -304,7 +293,7 @@ export default function HistoryModal({ onClose, ignoreOutsideClickRef }: History
                         <EditIcon className="w-3.5 h-3.5" />
                       </HistoryActionButton>
                       <HistoryActionButton
-                        tooltip="删除"
+                        tooltip={i18n.t("history.delete")}
                         onClick={(e) => handleDelete(e, c.id)}
                         className="p-1.5 hover:bg-gray-200 dark:hover:bg-white/10 rounded-md text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
                       >

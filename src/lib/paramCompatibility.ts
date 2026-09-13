@@ -1,5 +1,7 @@
 import { DEFAULT_PARAMS, type AppSettings, type TaskParams } from '../types'
-import { normalizeImageSize } from './size'
+import { getActiveApiProfile, isOpenAICompatibleProvider } from './apiProfiles'
+import { getImageGenerationModel, isGptImage25Model } from './imageModels'
+import { normalizeCodexCliImageSize, normalizeImageSize } from './size'
 
 export const MAX_OPENAI_OUTPUT_IMAGES = 10
 
@@ -12,6 +14,7 @@ export function normalizeParamsForSettings(
   settings: AppSettings,
   _options: { hasInputImages?: boolean } = {},
 ): TaskParams {
+  const activeProfile = getActiveApiProfile(settings)
   const outputImageLimit = getOutputImageLimitForSettings(settings)
   const nextParams: TaskParams = {
     ...params,
@@ -19,8 +22,13 @@ export function normalizeParamsForSettings(
     n: Math.min(outputImageLimit, Math.max(1, params.n || DEFAULT_PARAMS.n)),
   }
 
-  if (settings.codexCli) {
+  if (isOpenAICompatibleProvider(settings, activeProfile.provider) && activeProfile.codexCli) {
+    nextParams.size = normalizeCodexCliImageSize(nextParams.size)
     nextParams.quality = DEFAULT_PARAMS.quality
+  }
+
+  if ((nextParams.quality === 'xhigh' || nextParams.quality === 'max') && !isGptImage25Model(getImageGenerationModel(activeProfile))) {
+    nextParams.quality = 'high'
   }
 
   if (nextParams.output_format === 'png') {

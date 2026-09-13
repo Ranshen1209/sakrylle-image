@@ -1,3 +1,4 @@
+import i18n from '../../lib/i18n'
 import type { ApiProfile, TaskParams } from '../../types'
 import { dismissAllTooltips } from '../../lib/tooltipDismiss'
 import Select from '../Select'
@@ -99,15 +100,15 @@ export default function InputParamsPanel({
         onTouchCancel={sizeHint.hide}
         onClick={sizeHint.show}
       >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">尺寸</span>
+        <span className="text-gray-400 dark:text-gray-500 ml-1">{i18n.t("detail.size")}</span>
         <button
           type="button"
           onClick={() => { dismissAllTooltips(); onOpenSizePicker() }}
           className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs text-left transition-all duration-200 shadow-sm font-mono"
-          title="选择尺寸"
         >
           {displaySize}
         </button>
+        <ButtonTooltip visible={activeProfile.codexCli && sizeHint.visible} text={i18n.t("upstreamSync.codexCliUsesPromptInstructionsForSizeInstead")} />
       </label>
       <label
         className="relative flex flex-col gap-0.5"
@@ -118,7 +119,7 @@ export default function InputParamsPanel({
         onTouchCancel={qualityHint.hide}
         onClick={qualityHint.show}
       >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">质量</span>
+        <span className="text-gray-400 dark:text-gray-500 ml-1">{i18n.t("detail.quality")}</span>
         <Select
           value={activeProfile.codexCli ? 'auto' : params.quality}
           onChange={(val) => {
@@ -126,23 +127,25 @@ export default function InputParamsPanel({
           }}
           options={qualityOptions}
           disabled={activeProfile.codexCli}
+          showValueTooltips={false}
           className={activeProfile.codexCli
             ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
             : selectClass}
         />
         <ButtonTooltip
           visible={activeProfile.codexCli && qualityHint.visible}
-          text="Codex CLI 不支持质量参数"
+          text={i18n.t("input.qualityDisabledCodexCli")}
         />
       </label>
       <label className="flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">格式</span>
+        <span className="text-gray-400 dark:text-gray-500 ml-1">{i18n.t("detail.format")}</span>
         <Select
           value={params.output_format}
           onChange={(val) => {
             setParams({
               output_format: val as TaskParams['output_format'],
-              ...(val === 'png' ? { output_compression: null } : { transparent_output: false }),
+              ...(val === 'png' ? { output_compression: null } : {}),
+              ...(val === 'jpeg' ? { transparent_output: false } : {}),
             })
           }}
           options={[
@@ -150,10 +153,11 @@ export default function InputParamsPanel({
             { label: 'JPEG', value: 'jpeg' },
             { label: 'WebP', value: 'webp' },
           ]}
+          showValueTooltips={false}
           className={selectClass}
         />
       </label>
-      {showTransparentOutputControl ? (
+      {showTransparentOutputControl && (
         <label
           className="relative flex flex-col gap-0.5"
           onMouseEnter={transparentOutputHint.show}
@@ -163,26 +167,31 @@ export default function InputParamsPanel({
           onTouchCancel={transparentOutputHint.hide}
           onClick={transparentOutputHint.show}
         >
-          <span className="text-gray-400 dark:text-gray-500 ml-1">透明背景</span>
+          <span className="text-gray-400 dark:text-gray-500 ml-1">{i18n.t("upstreamSync.transparentBackground")}</span>
           <Select
             value={transparentOutputEnabled ? 'on' : 'off'}
             onChange={(val) => {
               if (!transparentOutputAvailable) return
-              setParams({ transparent_output: val === 'on', output_compression: null })
+              setParams({
+                transparent_output: val === 'on',
+                ...(params.output_format === 'png' ? { output_compression: null } : {}),
+              })
             }}
             options={[
               { label: 'false', value: 'off' },
               { label: 'true', value: 'on' },
             ]}
+            showValueTooltips={false}
             className={selectClass}
             onOpenChange={onTransparentOutputMenuOpenChange}
           />
           <ButtonTooltip
             visible={transparentOutputHint.visible}
-            text="基于提示词与后处理，并非模型原生生成"
+            text={i18n.t("upstreamSync.chooseTheMethodInTheApiConfigurationSettings")}
           />
         </label>
-      ) : (
+      )}
+      {!showTransparentOutputControl && (
         <label
           className="relative flex flex-col gap-0.5"
           onMouseEnter={compressionHint.show}
@@ -192,7 +201,7 @@ export default function InputParamsPanel({
           onTouchCancel={compressionHint.hide}
           onClick={compressionHint.show}
         >
-          <span className="text-gray-400 dark:text-gray-500 ml-1">压缩率</span>
+          <span className="text-gray-400 dark:text-gray-500 ml-1">{i18n.t("detail.compression")}</span>
           <input
             value={outputCompressionInput}
             onChange={(e) => setOutputCompressionInput(e.target.value)}
@@ -210,7 +219,7 @@ export default function InputParamsPanel({
           />
           <ButtonTooltip
             visible={compressionHint.visible}
-            text="仅 JPEG 和 WebP 支持压缩率"
+            text={i18n.t("input.compressionDisabledTip")}
           />
         </label>
       )}
@@ -223,7 +232,7 @@ export default function InputParamsPanel({
         onTouchCancel={moderationHint.hide}
         onClick={moderationHint.show}
       >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">审核</span>
+        <span className="text-gray-400 dark:text-gray-500 ml-1">{i18n.t("detail.moderation")}</span>
         <Select
           value={moderationDisabled ? 'auto' : params.moderation}
           onChange={(val) => {
@@ -234,6 +243,7 @@ export default function InputParamsPanel({
             { label: 'low', value: 'low' },
           ]}
           disabled={moderationDisabled}
+          showValueTooltips={false}
           className={moderationDisabled
             ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
             : selectClass}
@@ -252,7 +262,7 @@ export default function InputParamsPanel({
         }}
         onClick={() => { showAgentNHint(); streamConcurrentHint.show() }}
       >
-        <span className="text-gray-400 dark:text-gray-500 ml-1">数量</span>
+        <span className="text-gray-400 dark:text-gray-500 ml-1">{i18n.t("detail.count")}</span>
         <input
           value={nInput}
           onChange={(e) => handleNInputChange(e.target.value)}
@@ -282,7 +292,7 @@ export default function InputParamsPanel({
           }`}
         />
         <ButtonTooltip visible={nLimitHint.visible} text={nLimitHintText} />
-        <ButtonTooltip visible={streamConcurrentByN && streamConcurrentHint.visible && !nLimitHint.visible} text="数量大于 1 时会将多图生成拆分为并发单图" />
+        <ButtonTooltip visible={streamConcurrentByN && streamConcurrentHint.visible && !nLimitHint.visible} text={i18n.t("input.concurrentSplitTip")} />
       </label>
     </div>
   )

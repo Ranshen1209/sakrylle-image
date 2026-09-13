@@ -1,6 +1,8 @@
+import i18n from '../lib/i18n'
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, retryTask } from '../store'
+import { useStore, retryTask } from '../store'
+import { ensureImageThumbnailCached, subscribeImageThumbnail } from '../lib/imageCache'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
 import { DEFAULT_IMAGES_MODEL } from '../lib/apiProfiles'
@@ -299,7 +301,7 @@ export default function TaskCard({
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
-      : 'bg-blue-500'
+      : 'bg-[#9181bd]'
     : 'bg-gray-200 dark:bg-gray-700'
 
   const qualityDisplay = getParamDisplay(task, 'quality')
@@ -351,9 +353,9 @@ export default function TaskCard({
           !isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'
         } ${
           task.status === 'running'
-            ? 'border-blue-400 generating'
+            ? 'border-[#a28fc9] generating'
             : isSelected
-            ? 'border-blue-500 shadow-md ring-2 ring-blue-500/50'
+            ? 'border-[#9181bd] shadow-md ring-2 ring-[#9181bd]/50'
             : 'border-gray-200 dark:border-white/[0.08] hover:border-gray-300 dark:hover:border-white/[0.18]'
         }`}
         onClick={(e) => {
@@ -390,7 +392,7 @@ export default function TaskCard({
       >
         {/* 选中时的角标 */}
       {isSelected && (
-        <div className="absolute top-2 right-2 z-10 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
+        <div className="absolute top-2 right-2 z-10 w-5 h-5 bg-[#9181bd] rounded-full flex items-center justify-center shadow-sm">
           <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
           </svg>
@@ -409,8 +411,8 @@ export default function TaskCard({
                 onError={() => setStreamPreviewLoaded(false)}
               />
               {streamPreviewLoaded && (
-                <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-blue-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
-                  预览
+                <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-[#9181bd] px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+                  {i18n.t("tasks.preview")}
                 </span>
               )}
             </>
@@ -418,7 +420,7 @@ export default function TaskCard({
           {task.status === 'running' && (!streamPreviewSrc || !streamPreviewLoaded) && (
             <div className="flex flex-col items-center gap-2">
               <svg
-                className="w-8 h-8 text-blue-400 animate-spin"
+                className="w-8 h-8 text-[#a28fc9] animate-spin"
                 fill="none"
                 viewBox="0 0 24 24"
               >
@@ -436,7 +438,7 @@ export default function TaskCard({
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                 />
               </svg>
-              <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500">{i18n.t("tasks.generating")}</span>
             </div>
           )}
           {task.status === 'error' && (
@@ -455,7 +457,7 @@ export default function TaskCard({
                 />
               </svg>
               <span className={`text-xs text-center leading-tight ${isInterrupted ? 'text-yellow-500' : 'text-red-400'}`}>
-                {isInterrupted ? '已停止' : '失败'}
+                {isInterrupted ? i18n.t("tasks.stopped") : i18n.t("search.filterError")}
               </span>
             </div>
           )}
@@ -518,8 +520,8 @@ export default function TaskCard({
           <div className="flex-1 min-h-0 mb-2 overflow-hidden">
             {showPendingPrompt ? (
               <div className="leading-relaxed">
-                <p className="text-sm text-gray-700 dark:text-gray-300">正在生成……</p>
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
+                <p className="text-sm text-gray-700 dark:text-gray-300">{i18n.t("tasks.pending")}</p>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{i18n.t("tasks.pendingHint")}</p>
               </div>
             ) : (
               <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
@@ -565,42 +567,42 @@ export default function TaskCard({
               )}
               {/* Mask */}
               {task.maskImageId && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs flex-shrink-0">
+                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-[#f1edf8] dark:bg-[#9181bd]/10 text-[#7e6aa9] dark:text-[#a28fc9] text-xs flex-shrink-0">
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                   </svg>
-                  局部重绘
+                  {i18n.t("tasks.maskRedraw")}
                 </span>
               )}
               {/* Transparent background */}
               {showTransparentOutput && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs flex-shrink-0">
                   <TransparentBgIcon className="w-3 h-3 flex-shrink-0" />
-                  透明背景
+                  {i18n.t("upstreamSync.transparentBackground")}
                 </span>
               )}
               {/* Params: only show if not default or mismatch */}
               {showQuality && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">质量</span>
+                  <span className="text-gray-400 dark:text-gray-500">{i18n.t("detail.quality")}</span>
                   {qualityDisplay.isMismatch ? <ActualValueBadge value={qualityDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{qualityDisplay.displayValue}</span>}
                 </span>
               )}
               {showSize && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">尺寸</span>
+                  <span className="text-gray-400 dark:text-gray-500">{i18n.t("detail.size")}</span>
                   {sizeDisplay.isMismatch ? <ActualValueBadge value={sizeDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{sizeDisplay.displayValue}</span>}
                 </span>
               )}
               {showFormat && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">格式</span>
+                  <span className="text-gray-400 dark:text-gray-500">{i18n.t("detail.format")}</span>
                   {formatDisplay.isMismatch ? <ActualValueBadge value={formatDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{formatDisplay.displayValue}</span>}
                 </span>
               )}
               {showN && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">数量</span>
+                  <span className="text-gray-400 dark:text-gray-500">{i18n.t("detail.count")}</span>
                   {nDisplay.isMismatch ? <ActualValueBadge value={nDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{nDisplay.displayValue}</span>}
                 </span>
               )}
@@ -617,9 +619,9 @@ export default function TaskCard({
             >
               {(task.status === 'error' || settings.alwaysShowRetryButton) && (
                 <TaskActionButton
-                  tooltip="重试任务"
+                  tooltip={i18n.t("detail.retry")}
                   onClick={() => retryTask(task)}
-                  className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                  className="p-1.5 rounded-md hover:bg-[#f1edf8] dark:hover:bg-[#251d40]/30 text-gray-400 hover:text-[#9181bd] transition"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -627,7 +629,7 @@ export default function TaskCard({
                 </TaskActionButton>
               )}
               <TaskActionButton
-                tooltip={task.isFavorite ? '编辑收藏夹' : '收藏任务'}
+                tooltip={task.isFavorite ? i18n.t("upstreamSync.editCollections") : i18n.t("upstreamSync.favoriteTask")}
                 onClick={() => openFavoritePicker([task.id])}
                 className={`p-1.5 rounded-md transition ${
                   task.isFavorite
@@ -650,9 +652,9 @@ export default function TaskCard({
                 </svg>
               </TaskActionButton>
               <TaskActionButton
-                tooltip="复用配置"
+                tooltip={i18n.t("detail.reuseConfig")}
                 onClick={onReuse}
-                className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                className="p-1.5 rounded-md hover:bg-[#f1edf8] dark:hover:bg-[#251d40]/30 text-gray-400 hover:text-[#9181bd] transition"
               >
                 <svg
                   className="w-4 h-4"
@@ -669,7 +671,7 @@ export default function TaskCard({
                 </svg>
               </TaskActionButton>
               <TaskActionButton
-                tooltip="编辑输出"
+                tooltip={i18n.t("detail.editOutputs")}
                 onClick={onEditOutputs}
                 className="p-1.5 rounded-md hover:bg-green-50 dark:hover:bg-green-950/30 text-gray-400 hover:text-green-500 transition disabled:opacity-30"
                 disabled={!task.outputImages?.length}
@@ -689,7 +691,7 @@ export default function TaskCard({
                 </svg>
               </TaskActionButton>
               <TaskActionButton
-                tooltip="删除任务"
+                tooltip={i18n.t("upstreamSync.deleteTask")}
                 onClick={onDelete}
                 className="p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 transition"
               >

@@ -1,4 +1,6 @@
 import type { ApiProfile } from '../types'
+import { appendStreamingFormatHint } from './imageApiShared'
+import { getStreamEventErrorMessage } from './openaiCompatibleImageApi'
 import { compressImageForUpload } from './canvasImage'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
 import i18n from './i18n'
@@ -42,7 +44,7 @@ export function buildChatMessageContent(
   inputImageDataUrls: string[],
   maskDataUrl: string | undefined,
 ): ChatContentPart[] {
-  const text = `${PROMPT_REWRITE_GUARD_PREFIX}\n${prompt}${maskDataUrl ? MASK_INSTRUCTION : ''}`
+  const text = `Use the following text as the complete prompt. Do not rewrite it:\n${prompt}${maskDataUrl ? MASK_INSTRUCTION : ''}`
   const parts: ChatContentPart[] = [{ type: 'text', text }]
   for (const url of inputImageDataUrls) {
     parts.push({ type: 'image_url', image_url: { url } })
@@ -85,7 +87,7 @@ export async function parseChatCompletionImageStream(
     if (!isRecordValue(first)) return
     const delta = first.delta
     if (isRecordValue(delta)) accumulated += deltaContentToText(delta.content)
-  }, signal)
+  }, { signals: [signal], formatErrorMessage: appendStreamingFormatHint, getEventErrorMessage: getStreamEventErrorMessage })
 
   const url = extractMarkdownImageUrl(accumulated)
   if (!url) {

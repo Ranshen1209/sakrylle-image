@@ -1,3 +1,4 @@
+import i18n from './i18n'
 import type { TaskParams } from '../types'
 import { loadImage } from './canvasImage'
 
@@ -16,10 +17,10 @@ const KEY_COLOR_RGB = {
 
 const TRANSPARENT_PROMPT_TEMPLATE = [
   '[背景指令]',
-  '背景色选择规则：如果主体包含绿色系（绿、青绿、黄绿、草绿等）颜色，使用纯洋红色(#FF00FF)背景；否则一律使用纯绿色(#00FF00)背景。',
-  '背景要求：整张画布仅由所选纯色填充，无任何渐变、纹理、阴影、光照变化、地面或环境元素。',
-  '主体要求：单主体、完整呈现、轮廓清晰锐利。主体与背景之间保持干净的边缘分离，不要有颜色溢出或混合。',
-  '禁止：主体本身、描边、光晕、投影或反射中不能出现所选背景色。',
+  i18n.t("upstreamSync.usePureMagentaFf00ffIfTheSubjectIncludes"),
+  i18n.t("upstreamSync.fillTheCanvasWithOnlyTheChosenSolid"),
+  i18n.t("upstreamSync.showASingleCompleteSubjectWithASharp"),
+  i18n.t("upstreamSync.doNotUseTheChosenBackgroundColorIn"),
 ].join('\n')
 
 export function buildTransparentPrompt(prompt: string) {
@@ -29,8 +30,8 @@ export function buildTransparentPrompt(prompt: string) {
 export function getTransparentRequestParams(params: TaskParams): TaskParams {
   return {
     ...params,
-    output_format: 'png',
-    output_compression: null,
+    output_format: params.output_format === 'webp' ? 'webp' : 'png',
+    output_compression: params.output_format === 'webp' ? params.output_compression : null,
     transparent_output: true,
   }
 }
@@ -42,20 +43,28 @@ export function createTransparentOutputMeta(prompt: string): TransparentOutputMe
   }
 }
 
-export async function removeKeyedBackgroundFromDataUrl(dataUrl: string, keyColor?: string): Promise<string> {
+export async function removeKeyedBackgroundFromDataUrl(
+  dataUrl: string,
+  keyColor?: string,
+  outputFormat: 'png' | 'webp' = 'png',
+  outputCompression?: number | null,
+): Promise<string> {
   const image = await loadImage(dataUrl)
   const canvas = document.createElement('canvas')
   canvas.width = image.naturalWidth
   canvas.height = image.naturalHeight
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) throw new Error('当前浏览器不支持 Canvas，无法执行透明背景后处理')
+  if (!ctx) throw new Error(i18n.t("upstreamSync.canvasIsUnavailableTransparentBackgroundProcessingCannotRun"))
 
   ctx.drawImage(image, 0, 0)
   const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height)
   const effectiveKeyColor = keyColor || detectKeyColorFromPixels(pixels.data, canvas.width, canvas.height)
   removeKeyedBackgroundFromPixels(pixels.data, canvas.width, canvas.height, effectiveKeyColor)
   ctx.putImageData(pixels, 0, 0)
-  return canvas.toDataURL('image/png')
+  const quality = outputFormat === 'webp' && outputCompression != null
+    ? Math.max(0, Math.min(1, 1 - outputCompression / 100))
+    : undefined
+  return canvas.toDataURL(`image/${outputFormat}`, quality)
 }
 
 export function detectKeyColorFromPixels(data: Uint8ClampedArray, width: number, height: number): string {
@@ -97,7 +106,7 @@ export function removeKeyedBackgroundFromPixels(
   height: number,
   keyColor: string,
 ) {
-  if (data.length < width * height * 4) throw new Error('透明背景像素数据尺寸不匹配')
+  if (data.length < width * height * 4) throw new Error(i18n.t("upstreamSync.transparentBackgroundPixelDimensionsDoNotMatch"))
   const keyRgb = getKeyColorRgb(keyColor)
   const mask = buildBackgroundMask(data, width, height, keyRgb)
   writeTransparentPixels(data, mask, width, height, keyRgb)
@@ -382,7 +391,7 @@ function removeColorSpill(
 
 function getKeyColorRgb(keyColor: string): Rgb {
   const rgb = KEY_COLOR_RGB[keyColor.toUpperCase() as keyof typeof KEY_COLOR_RGB]
-  if (!rgb) throw new Error('透明背景键色不支持')
+  if (!rgb) throw new Error(i18n.t("upstreamSync.unsupportedTransparencyKeyColor"))
   return rgb
 }
 

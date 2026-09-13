@@ -1,3 +1,4 @@
+import { persistAssistantStatus, renderAssistantStatus } from './agentSentinels'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import i18n from './i18n'
 import {
@@ -166,4 +167,30 @@ describe('agentSentinels', () => {
       expect(stripAgentErrorPrefix('hello')).toBe('hello')
     })
   })
+})
+
+describe('persisted translated errors after upstream extraction', () => {
+  it('stores a key and parameters and renders it in the selected language', async () => {
+    const { persistErrorMessage, resolveErrorForDisplay } = await import('./agentSentinels')
+    await i18n.changeLanguage('zh')
+    const stored = persistErrorMessage(i18n.t('upstreamSync.message51', { value0: 'HTTP 503' }))
+    expect(stored).toContain('__sakrylle:i18n:')
+    expect(stored).not.toContain('无法继续恢复任务')
+    await i18n.changeLanguage('en')
+    expect(resolveErrorForDisplay(stored)).toBe('Cannot resume task: HTTP 503')
+    expect(persistErrorMessage('provider-specific opaque failure')).toBe('provider-specific opaque failure')
+    await i18n.changeLanguage('zh')
+  })
+})
+
+it('stores assistant application status independently of language and leaves model text intact', async () => {
+  await i18n.changeLanguage('zh')
+  const stopped = persistAssistantStatus('Model answer\n\n已停止生成。')
+  const failed = persistAssistantStatus('请求失败：请求中断')
+  expect(stopped).toBe('Model answer\n\n__sakrylle:agent_stopped__')
+  expect(failed).toBe('__sakrylle:agent_error:__sakrylle:openai_interrupted__')
+  expect(persistAssistantStatus('Normal model text')).toBe('Normal model text')
+  await i18n.changeLanguage('en')
+  expect(renderAssistantStatus(stopped)).toBe('Model answer\n\nGeneration stopped.')
+  expect(renderAssistantStatus(failed)).toBe('Request failed: Request interrupted')
 })

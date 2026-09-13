@@ -23,6 +23,7 @@ const SAKRYLLE_BASE = 'https://api.sakrylle.com/v1'
 
 function createProfile(overrides: Partial<ApiProfile> = {}): ApiProfile {
   return {
+    transparentBackgroundMethod: 'api',
     id: 'test',
     name: 'Test',
     provider: 'openai',

@@ -53,7 +53,7 @@ export function resolveErrorForDisplay(value: string | undefined | null, fallbac
   if (!value) return fallback
   if (isAgentStoppedSentinel(value)) return i18n.t('agent.stopped')
   if (isOpenAIInterruptedSentinel(value)) return i18n.t('errors.openaiInterrupted')
-  return value
+  return renderPersistedError(value)
 }
 
 /** 检查 message.content 是否以错误前缀开头（兼容中英历史值与当前语言） */
@@ -72,4 +72,63 @@ export function stripAgentErrorPrefix(content: string): string {
     if (content.startsWith(prefix)) return content.slice(prefix.length)
   }
   return content
+}
+
+/** Persist application-generated errors by translation key; preserve provider errors verbatim. */
+export function persistErrorMessage(value: string | null | undefined): string | null {
+  if (!value) return value ?? null
+  if (isAgentStoppedSentinel(value)) return SENTINEL_AGENT_STOPPED
+  if (isOpenAIInterruptedSentinel(value)) return SENTINEL_OPENAI_INTERRUPTED
+  if (value.startsWith('__sakrylle:i18n:')) return value
+  for (const language of ['zh', 'en']) {
+    for (const namespace of ['errors', 'upstreamSync']) {
+      const messages = i18n.getResource(language, 'translation', namespace) as Record<string, unknown> | undefined
+      for (const [key, message] of Object.entries(messages ?? {})) {
+        if (typeof message !== 'string') continue
+        const names: string[] = []
+        const escaped = message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const pattern = escaped.replace(/\\\{\\\{([^{}]+)\\\}\\\}/g, (_, name: string) => {
+          names.push(name)
+          return '([\\s\\S]*?)'
+        })
+        const match = new RegExp(`^${pattern}$`).exec(value)
+        if (!match) continue
+        const params = Object.fromEntries(names.map((name, index) => [name, match[index + 1]]))
+        return `__sakrylle:i18n:${JSON.stringify({ key: `${namespace}.${key}`, params })}`
+      }
+    }
+  }
+  return value
+}
+
+function renderPersistedError(value: string): string {
+  if (!value.startsWith('__sakrylle:i18n:')) return value
+  try {
+    const record = JSON.parse(value.slice('__sakrylle:i18n:'.length))
+    if (typeof record.key !== 'string' || !/^(errors|upstreamSync)\./.test(record.key)) return value
+    return i18n.t(record.key, record.params ?? {}) as string
+  } catch {
+    return value
+  }
+}
+
+const AGENT_ERROR_SENTINEL = '__sakrylle:agent_error:'
+
+export function persistAssistantStatus(content: string): string {
+  if (content.startsWith(AGENT_ERROR_SENTINEL)) return content
+  if (startsWithAgentErrorPrefix(content)) {
+    return AGENT_ERROR_SENTINEL + (persistErrorMessage(stripAgentErrorPrefix(content)) ?? '')
+  }
+  for (const stopped of [...LEGACY_AGENT_STOPPED, SENTINEL_AGENT_STOPPED]) {
+    if (content === stopped) return SENTINEL_AGENT_STOPPED
+    if (content.endsWith('\n\n' + stopped)) return content.slice(0, -stopped.length) + SENTINEL_AGENT_STOPPED
+  }
+  return content
+}
+
+export function renderAssistantStatus(content: string): string {
+  if (content.startsWith(AGENT_ERROR_SENTINEL)) {
+    return i18n.t('agent.errorMessagePrefix') + resolveErrorForDisplay(content.slice(AGENT_ERROR_SENTINEL.length))
+  }
+  return content.split(SENTINEL_AGENT_STOPPED).join(i18n.t('agent.stopped'))
 }
