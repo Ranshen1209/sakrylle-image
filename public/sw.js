@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sakrylle-image-playground-v0.12.0'
+const CACHE_NAME = 'sakrylle-image-playground-v0.12.1'
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './favicon.png']
 const APP_SHELL_URLS = new Set(APP_SHELL.map((path) => new URL(path, self.registration.scope).href))
 const ASSETS_PATH = new URL('./assets/', self.registration.scope).pathname

@@ -692,20 +692,24 @@ html.dark [contenteditable] *::selection {
 }
 ::view-transition-new(root) {
   z-index: 2;
-  /* Linear easing is deliberate: an ease-out curve front-loads the radius so
-     the circle visually covers the screen in the first ~20% of the timeline,
-     yet the View Transition (and thus the page freeze) lives for the full
-     duration — leaving a long invisible tail where the page is locked but
-     nothing moves. Linear makes coverage land at the very end, so the lock
-     time tracks the visible motion instead of overshooting it. */
-  animation: theme-switch-clip 480ms linear forwards;
+  /* theme.ts supplies viewport coordinates directly through the Web Animations
+     API after the new snapshot is ready. */
 }
-@keyframes theme-switch-clip {
-  from { clip-path: circle(0% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%)); }
-  to   { clip-path: circle(150% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%)); }
-}
+
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-new(root) {
     animation: none;
   }
+}
+
+/* Keep settings help readable and technical tokens intact on narrow screens. */
+.settings-api-content [data-selectable-text] {
+  line-height: 1.65;
+  overflow-wrap: break-word;
+}
+.settings-api-content code {
+  display: inline-block;
+  white-space: nowrap;
+  font-size: inherit;
+  vertical-align: baseline;
 }

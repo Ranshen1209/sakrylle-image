@@ -1488,7 +1488,7 @@ export default function SettingsModal() {
             )}
             
             {activeTab === 'api' && (
-              <div className="space-y-4">
+              <div className="settings-api-content space-y-5">
                 <div>
                   <div className="mb-1.5 flex items-center gap-1.5">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">{t('settings.api.currentProfile')}</span>
@@ -1733,7 +1733,7 @@ export default function SettingsModal() {
                     {apiProxyEnabled ? (
                       <span className="text-yellow-600 dark:text-yellow-500">{i18n.t("settingsApiUrlExtras.proxyEnabledNote")}</span>
                     ) : (
-                      <span>{i18n.t("upstreamSync.aTrailing")} <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">/</code> {i18n.t("upstreamSync.usesTheAddressDirectlyWithoutAddingA")} <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">/v1</code> {i18n.t("upstreamSync.prefixOverrideWithTheQueryParameter")}<code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">?apiUrl=</code>。</span>
+                      <span>{t('settings.api.baseUrlHelp')}</span>
                     )}
                   </div>
                 </label>
@@ -1834,15 +1834,12 @@ export default function SettingsModal() {
                 </div>
               </div>
 
-              {/* 6. 分组选择器（OAuth 登录时显示） */}
-              {activeProfile.provider === 'openai' && sakrylleLoggedIn && (
-                <>
-                  <GroupSelector mode="images" label={t('settings.api.imagesGroup')} hint={t('settings.api.imagesGroupHint')} onGroupChange={() => setModelRefreshKey(k => k + 1)} />
-                  <GroupSelector mode="responses" label={t('settings.api.responsesGroup')} hint={t('settings.api.responsesGroupHint')} onGroupChange={() => setModelRefreshKey(k => k + 1)} />
-                </>
-              )}
-
               {/* 7. 模型 ID（Images API） */}
+              <section className="glass-card rounded-2xl p-4 space-y-4">
+                <h4 className="text-sm font-medium text-[#7e6aa9] dark:text-[#c4b8e0]">{t('settings.api.galleryModels')}</h4>
+                {activeProfile.provider === 'openai' && sakrylleLoggedIn && (
+                  <GroupSelector mode="images" label={t('settings.api.imagesGroup')} hint={t('settings.api.imagesGroupHint')} onGroupChange={() => setModelRefreshKey(k => k + 1)} />
+                )}
               <label className="block">
                 <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
                   {t('settings.api.modelIdImages')}
@@ -1859,9 +1856,15 @@ export default function SettingsModal() {
                   {t('settings.api.modelHintImages', { model: DEFAULT_IMAGES_MODEL })}
                 </div>
               </label>
+              </section>
 
               {/* 7.5. 模型 ID（Responses API） */}
               {activeProfile.provider === 'openai' && (
+              <section className="glass-card rounded-2xl p-4 space-y-4">
+                <h4 className="text-sm font-medium text-[#7e6aa9] dark:text-[#c4b8e0]">{t('settings.api.agentModels')}</h4>
+                {sakrylleLoggedIn && (
+                  <GroupSelector mode="responses" label={t('settings.api.responsesGroup')} hint={t('settings.api.responsesGroupHint')} onGroupChange={() => setModelRefreshKey(k => k + 1)} />
+                )}
               <label className="block">
                 <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
                   {t('settings.api.modelIdResponses')}
@@ -1878,11 +1881,10 @@ export default function SettingsModal() {
                   {t('settings.api.modelHintResponses', { model: DEFAULT_RESPONSES_MODEL })}
                 </div>
               </label>
-              )}
-
-              {activeProfile.provider === 'openai' && (
-                <label className="block">
-                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">{i18n.t("upstreamSync.imageGenerationModel")}</span>
+                <details className="border-t border-[#9181bd]/15 pt-3">
+                  <summary className="cursor-pointer text-xs font-medium text-gray-500 dark:text-gray-400 select-none">{t('settings.api.agentImageAdvanced')}</summary>
+                <label className="mt-4 block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">{t('settings.api.agentToolModel')}</span>
                   <input
                     value={activeProfile.imageGenerationModel ?? ''}
                     onChange={(e) => updateActiveProfile({ imageGenerationModel: e.target.value })}
@@ -1893,9 +1895,11 @@ export default function SettingsModal() {
                     className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#b9a9da] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-[#9181bd]/50"
                   />
                   <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                    {i18n.t("upstreamSync.theResponsesApi")} <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> {i18n.t("upstreamSync.toolRequiresAGptImageModelSuchAs")} <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_IMAGES_MODEL}</code>{i18n.t("upstreamSync.leaveEmptyToUseTheApiDefaultWithout")}<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?imageGenerationModel=</code>。
+                    {t('settings.api.agentToolModelHelp')}
                   </div>
                 </label>
+                </details>
+              </section>
               )}
 
               {activeProfile.provider === 'openai' && (

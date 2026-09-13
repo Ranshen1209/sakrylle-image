@@ -61,8 +61,10 @@ export function switchTheme(next: Theme, options: SwitchOptions = {}) {
     x: window.innerWidth / 2,
     y: window.innerHeight / 2,
   }
-  root.style.setProperty('--theme-switch-x', `${x}px`)
-  root.style.setProperty('--theme-switch-y', `${y}px`)
+  const radius = Math.hypot(
+    Math.max(x, window.innerWidth - x),
+    Math.max(y, window.innerHeight - y),
+  )
 
   const reduceMotion = typeof window !== 'undefined'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -80,13 +82,18 @@ export function switchTheme(next: Theme, options: SwitchOptions = {}) {
     return
   }
 
-  // The browser snapshots the old frame, applies the new theme, then animates
-  // the new snapshot in. clip-path expand from the click point is driven by the
-  // ::view-transition-new(root) keyframes in index.css. Native GPU compositing,
-  // so no flash and no per-element transition stutter.
+  // Animate the snapshot with explicit viewport coordinates. Custom properties
+  // on html are not reliably inherited by View Transition pseudo-elements.
   activeThemeTransition?.skipTransition?.()
   const transition = startViewTransition.call(document, apply)
   activeThemeTransition = transition
+  void transition.ready.then(() => {
+    if (activeThemeTransition !== transition) return
+    root.animate(
+      { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+      { duration: 480, easing: 'linear', fill: 'forwards', pseudoElement: '::view-transition-new(root)' },
+    )
+  }).catch(() => {})
   void transition.finished
     .catch(() => {})
     .finally(() => {
