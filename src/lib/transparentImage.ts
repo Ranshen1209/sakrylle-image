@@ -16,11 +16,11 @@ const KEY_COLOR_RGB = {
 } as const
 
 const TRANSPARENT_PROMPT_TEMPLATE = [
-  '[背景指令]',
-  i18n.t("upstreamSync.usePureMagentaFf00ffIfTheSubjectIncludes"),
-  i18n.t("upstreamSync.fillTheCanvasWithOnlyTheChosenSolid"),
-  i18n.t("upstreamSync.showASingleCompleteSubjectWithASharp"),
-  i18n.t("upstreamSync.doNotUseTheChosenBackgroundColorIn"),
+  '[Background instructions]',
+  'Background color rule: if the subject contains any green tones (green, teal, yellow-green, grass green, etc.), use a solid magenta (#FF00FF) background; otherwise always use a solid green (#00FF00) background.',
+  'Background requirements: fill the entire canvas with the chosen solid color only, with no gradients, textures, shadows, lighting changes, ground, or environmental elements.',
+  'Subject requirements: a single subject, fully visible, with clean and sharp outlines. Keep a clean edge separation between the subject and the background, with no color bleeding or blending.',
+  'Forbidden: the chosen background color must not appear in the subject itself, its outlines, glows, shadows, or reflections.',
 ].join('\n')
 
 export function buildTransparentPrompt(prompt: string) {
@@ -30,7 +30,7 @@ export function buildTransparentPrompt(prompt: string) {
 export function getTransparentRequestParams(params: TaskParams): TaskParams {
   return {
     ...params,
-    output_format: params.output_format === 'webp' ? 'webp' : 'png',
+    output_format: params.output_format === 'jpeg' ? 'png' : params.output_format,
     output_compression: params.output_format === 'webp' ? params.output_compression : null,
     transparent_output: true,
   }

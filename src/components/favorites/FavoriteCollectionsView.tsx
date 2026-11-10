@@ -7,6 +7,7 @@ import {
   useStore,
 } from '../../store'
 import { ALL_FAVORITES_COLLECTION_ID } from '../../lib/favoriteState'
+import { getPageScrollTop } from '../../lib/pageScroll'
 import { useDragSelect } from '../../hooks/useDragSelect'
 import { FavoriteIcon } from '../icons'
 import { FavoriteCollectionOverviewCard } from './FavoriteCollectionOverviewCard'
@@ -169,7 +170,7 @@ export function FavoriteCollectionsView() {
           className="fixed bg-[#9181bd]/20 border border-[#9181bd]/50 pointer-events-none z-[30]"
           style={{
             left: Math.min(selectionBox.startPageX, selectionBox.currentPageX) - window.scrollX,
-            top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - window.scrollY,
+            top: Math.min(selectionBox.startPageY, selectionBox.currentPageY) - getPageScrollTop(),
             width: Math.abs(selectionBox.currentPageX - selectionBox.startPageX),
             height: Math.abs(selectionBox.currentPageY - selectionBox.startPageY),
           }}

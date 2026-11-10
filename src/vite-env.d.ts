@@ -11,6 +11,7 @@ interface ImportMetaEnv {
   readonly VITE_DOCKER_DEPLOYMENT?: string
   readonly VITE_DOCKER_LEGACY_API_URL_USED?: string
   readonly VITE_SHOW_PRESET_CONFIG_ONLY?: string
+  readonly VITE_SHOW_CONFIG_CHANGE_DIALOG?: string
   readonly VITE_LOCK_PRESET_CONFIG_PARAMS?: string
   readonly VITE_PREVENT_PRESET_CONFIG_DELETION?: string
   readonly VITE_SHOW_DEFAULT_CONFIG_ONLY?: string
@@ -18,6 +19,10 @@ interface ImportMetaEnv {
   readonly VITE_SAKRYLLE_OAUTH_CLIENT_ID?: string
   readonly VITE_SAKRYLLE_OIDC_ENABLED?: string
   readonly VITE_SAKRYLLE_OIDC_ISSUER?: string
+  readonly VITE_DEFAULT_UI_FONT?: string
+  readonly VITE_DEFAULT_MONO_FONT?: string
+  readonly VITE_BUILTIN_FONT_SOURCE?: string
+  readonly VITE_WEB_APP_URL?: string
 }
 
 interface ImportMeta {

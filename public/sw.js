@@ -27,7 +27,8 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url)
   if (url.origin !== self.location.origin) return
 
-  if (request.mode === 'navigate') {
+  // 只缓存顶层页面；公告卡片中的 iframe 也是导航请求，不能写进 index.html 的缓存
+  if (request.mode === 'navigate' && request.destination === 'document') {
     event.respondWith(
       fetch(request)
         .then((response) => {

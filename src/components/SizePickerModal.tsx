@@ -24,7 +24,8 @@ interface Props {
   currentSize: string
   onSelect: (size: string) => void
   onClose: () => void
-  allowAuto?: boolean
+  /** 不能使用自动尺寸的原因；设置后“自动”置灰 */
+  autoDisabledReason?: string
   codexCli?: boolean
 }
 
@@ -48,7 +49,7 @@ function findPresetForSize(size: string) {
   return null
 }
 
-export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true, codexCli = false }: Props) {
+export default function SizePickerModal({ currentSize, onSelect, onClose, autoDisabledReason, codexCli = false }: Props) {
   const { t } = useTranslation()
   usePreventBackgroundScroll(true)
 
@@ -78,14 +79,14 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   const currentPreset = findPresetForSize(currentSize)
   const currentParsedSize = parseSize(currentSize)
   const [mode, setMode] = useState<Mode>(() => {
-    if (!currentSize || currentSize === 'auto') return allowAuto ? 'auto' : 'ratio'
+    if (!currentSize || currentSize === 'auto') return autoDisabledReason ? 'ratio' : 'auto'
     if (currentPreset) return 'ratio'
     return 'resolution'
   })
 
   // Ratio mode state
   const [tier, setTier] = useState<SizeTier>(currentPreset?.tier ?? '1K')
-  const [ratio, setRatio] = useState(currentPreset?.ratio ?? (allowAuto ? '1:1' : '4:3'))
+  const [ratio, setRatio] = useState(currentPreset?.ratio ?? (autoDisabledReason ? '4:3' : '1:1'))
   const [customRatio, setCustomRatio] = useState('16:9')
 
   // Resolution mode state
@@ -94,12 +95,11 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
 
   const [hintVisible, setHintVisible] = useState(false)
   const hintTimerRef = useRef<number | null>(null)
-  const [tierHint, setTierHint] = useState<SizeTier | null>(null)
-  const tierHintTimerRef = useRef<number | null>(null)
+  // 当前显示原因的置灰按钮
+  const [disabledHint, setDisabledHint] = useState<string | null>(null)
 
   useEffect(() => () => {
     if (hintTimerRef.current != null) window.clearTimeout(hintTimerRef.current)
-    if (tierHintTimerRef.current != null) window.clearTimeout(tierHintTimerRef.current)
   }, [])
 
   const normalizeSize = codexCli ? normalizeCodexCliImageSize : normalizeImageSize
@@ -165,6 +165,17 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
     }, 450)
   }
 
+  // 置灰按钮不响应鼠标和点击事件，由外层容器在悬停或轻点时显示原因，移开或点别处时关闭
+  const disabledHintHandlers = (key: string, disabled: boolean) => ({
+    onMouseEnter: () => {
+      if (disabled) setDisabledHint(key)
+    },
+    onMouseLeave: () => setDisabledHint(null),
+    onTouchEnd: () => {
+      if (disabled) setDisabledHint(key)
+    },
+  })
+
   const applySize = () => {
     if (!previewSize) return
     onSelect(previewSize)
@@ -208,14 +219,18 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
 
         <div className="space-y-6">
           <div className="flex rounded-xl bg-gray-100/80 p-1 dark:bg-white/[0.04]">
-            {allowAuto && (
+            <div className="relative flex flex-1" {...disabledHintHandlers('auto', Boolean(autoDisabledReason))}>
               <button
                 onClick={() => setMode('auto')}
-                className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'auto' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+                disabled={Boolean(autoDisabledReason)}
+                className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${mode === 'auto' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
               >
                 {t('size.auto')}
               </button>
-            )}
+              <ViewportTooltip visible={disabledHint === 'auto'} className="w-52 text-center">
+                {autoDisabledReason}
+              </ViewportTooltip>
+            </div>
             <button
               onClick={() => setMode('ratio')}
               className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition ${mode === 'ratio' ? 'bg-white text-gray-800 shadow-sm dark:bg-gray-700 dark:text-gray-100' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
@@ -257,35 +272,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                     {TIERS.map((item) => {
                       const disabled = codexCli && item !== '1K'
                       return (
-                        <div
-                          key={item}
-                          className="relative"
-                          onMouseEnter={() => {
-                            if (tierHintTimerRef.current != null) window.clearTimeout(tierHintTimerRef.current)
-                            if (disabled) setTierHint(item)
-                          }}
-                          onMouseLeave={() => setTierHint(null)}
-                          onTouchStart={() => {
-                            if (!disabled) return
-                            if (tierHintTimerRef.current != null) window.clearTimeout(tierHintTimerRef.current)
-                            tierHintTimerRef.current = window.setTimeout(() => {
-                              setTierHint(item)
-                              tierHintTimerRef.current = null
-                            }, 450)
-                          }}
-                          onTouchEnd={() => {
-                            if (tierHintTimerRef.current != null) window.clearTimeout(tierHintTimerRef.current)
-                            tierHintTimerRef.current = window.setTimeout(() => {
-                              setTierHint(null)
-                              tierHintTimerRef.current = null
-                            }, 1500)
-                          }}
-                          onTouchCancel={() => {
-                            if (tierHintTimerRef.current != null) window.clearTimeout(tierHintTimerRef.current)
-                            tierHintTimerRef.current = null
-                            setTierHint(null)
-                          }}
-                        >
+                        <div key={item} className="relative" {...disabledHintHandlers(item, disabled)}>
                           <button
                             className={`${buttonClass(tier === item)} w-full disabled:cursor-not-allowed disabled:opacity-40`}
                             onClick={() => setTier(item)}
@@ -293,7 +280,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                           >
                             {item}
                           </button>
-                          <ViewportTooltip visible={tierHint === item} className="w-52 text-center">
+                          <ViewportTooltip visible={disabledHint === item} className="w-52 text-center">
                             {i18n.t("upstreamSync.codexCliSupportsResolutionsUpTo1k")}
                           </ViewportTooltip>
                         </div>
@@ -384,7 +371,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                     </label>
                   </div>
                 </section>
-                <div className="rounded-xl border border-gray-200/80 bg-gray-50/80 p-3 text-xs text-gray-600 dark:border-white/[0.05] dark:bg-white/[0.02] dark:text-gray-400">
+                <div className="rounded-xl border border-transparent bg-black/[0.04] p-3 text-xs text-gray-600 dark:bg-white/[0.06] dark:text-gray-400">
                   <div className="flex items-start gap-2">
                     <svg className="mt-[2px] h-4 w-4 flex-shrink-0 text-[#9181bd]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

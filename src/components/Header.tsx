@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useStore } from '../store'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { useTooltip } from '../hooks/useTooltip'
+import { getPageScroller, getPageScrollTop } from '../lib/pageScroll'
 import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import ViewportTooltip from './ViewportTooltip'
 import HistoryModal from './HistoryModal'
@@ -45,6 +46,23 @@ export default function Header() {
   const [loggedIn, setLoggedIn] = useState<boolean>(() => Boolean(getStoredToken()))
   const [theme, setThemeState] = useState<Theme>(() => readStoredTheme())
   const currentLanguage: Language = i18n.language === 'en' ? 'en' : 'zh'
+  const privacyModeEpoch = useStore((s) => s.privacyModeEpoch)
+  const [popupEpoch, setPopupEpoch] = useState(privacyModeEpoch)
+  // Close the history popup in place. The header stays mounted so scroll state is preserved.
+  if (popupEpoch !== privacyModeEpoch) {
+    setPopupEpoch(privacyModeEpoch)
+    setShowHistoryModal(false)
+  }
+
+  // Page scrollbar origin follows the real header height (index.css --header-height).
+  const headerState = appMode === 'agent' && !agentMobileHeaderVisible
+    ? 'hidden'
+    : appMode === 'gallery' && scrollDirection === 'down' ? 'compact' : undefined
+  useEffect(() => {
+    const root = document.documentElement
+    if (headerState) root.dataset.header = headerState
+    else delete root.dataset.header
+  }, [headerState])
 
   useEffect(() => {
     if (appMode === 'agent') {
@@ -52,13 +70,13 @@ export default function Header() {
       return
     }
 
-    let lastScrollY = window.scrollY
+    let lastScrollY = getPageScrollTop()
     let ticking = false
 
     const handleScroll = () => {
       if (!ticking) {
         window.requestAnimationFrame(() => {
-          const currentScrollY = window.scrollY
+          const currentScrollY = getPageScrollTop()
           if (currentScrollY < 20) {
             setScrollDirection('up')
           } else if (currentScrollY > lastScrollY + 10) {
@@ -73,8 +91,9 @@ export default function Header() {
       }
     }
 
-    window.addEventListener('scroll', handleScroll, { passive: true })
-    return () => window.removeEventListener('scroll', handleScroll)
+    const scroller = getPageScroller()
+    scroller.addEventListener('scroll', handleScroll, { passive: true })
+    return () => scroller.removeEventListener('scroll', handleScroll)
   }, [appMode])
 
   useEffect(() => {
@@ -158,7 +177,7 @@ export default function Header() {
     <>
       <header
         data-no-drag-select
-        className={`safe-area-top fixed top-0 left-0 right-0 z-40 glass-panel border-b border-white/40 dark:border-white/[0.08] transition-transform duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? '-translate-y-full lg:translate-y-0' : 'translate-y-0'}`}
+        className={`safe-area-top pr-[var(--page-scrollbar-width)] fixed top-0 left-0 right-0 z-40 glass-panel border-b border-white/40 dark:border-white/[0.08] transition-transform duration-300 ease-in-out ${appMode === 'agent' && !agentMobileHeaderVisible ? '-translate-y-full lg:translate-y-0' : 'translate-y-0'}`}
       >
         <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between gap-2 relative">
           <div className="flex min-w-0 flex-1 items-center gap-2 pr-1 xl:pr-2">
@@ -476,8 +495,8 @@ export default function Header() {
         </div>
       </header>
 
-      {/* Hint for sliding down */}
-      <div className={`fixed top-0 left-0 right-0 z-30 flex justify-center pointer-events-none transition-all duration-300 ease-in-out lg:hidden ${appMode === 'agent' && hintVisible && !agentMobileHeaderVisible ? 'translate-y-[env(safe-area-inset-top,0px)] opacity-100' : '-translate-y-full opacity-0'}`}>
+      {/* Agent mode hides the header; keep the hint below the safe area and clear of the classic scrollbar. */}
+      <div className={`fixed top-0 left-0 right-0 pr-[var(--page-scrollbar-width)] z-30 flex justify-center pointer-events-none transition-all duration-300 ease-in-out lg:hidden ${appMode === 'agent' && hintVisible && !agentMobileHeaderVisible ? 'translate-y-[var(--safe-area-top)] opacity-100' : '-translate-y-full opacity-0'}`}>
         <div className="bg-black/60 backdrop-blur-sm text-white text-xs px-3 py-1.5 rounded-b-xl shadow-lg">
           {t('header.pullToReveal')}
         </div>

@@ -1,11 +1,27 @@
-import type { AppSettings, ResponsesOutputItem, TaskParams } from '../types'
+import { OUTPUT_FORMATS, type ApiProfile, type AppSettings, type ImageSearchGrounding, type ResponsesOutputItem, type TaskParams, type TaskRecord } from '../types'
 import { blobToDataUrl } from './dataUrl'
 import i18n from './i18n'
+import { DEFAULT_SVG_MODEL } from './imageModels'
+import { apiFetch, isTauri } from './platform'
 
 export const MIME_MAP: Record<string, string> = {
   png: 'image/png',
   jpeg: 'image/jpeg',
   webp: 'image/webp',
+  svg: 'image/svg+xml',
+  gif: 'image/gif',
+}
+
+/** GPT Image 2.6 的 complexity、SVG 和 GIF 字段；Images API 生成请求和 Responses 图像工具格式相同 */
+export function applyGptImage26Params(target: Record<string, unknown>, params: TaskParams, profile: ApiProfile) {
+  if (params.complexity !== 'auto') target.complexity = params.complexity
+  if (params.output_format === 'svg') {
+    target.svg = { model: profile.svgModel?.trim() || DEFAULT_SVG_MODEL }
+  }
+  if (params.output_format === 'gif') {
+    target.frame_count = params.frame_count
+    target.frame_duration_ms = params.frame_duration_ms
+  }
 }
 
 export const MAX_MASK_EDIT_FILE_BYTES = 50 * 1024 * 1024
@@ -19,13 +35,20 @@ export interface CallApiOptions {
   nativeTransparentBackground?: boolean
   /** 输入图片的 data URL 列表 */
   inputImageDataUrls: string[]
+  /** 与 inputImageDataUrls 按索引对齐的原链接，不是通过链接添加的为 null */
+  inputImageUrls?: (string | null)[]
   maskDataUrl?: string
+  /** 第一张输入图上的透明标注层，仅 Images API 编辑接口原生支持 */
+  markupDataUrl?: string
   skipCodexCliSizePrompt?: boolean
+  onPromptHintsPrepared?: (hints: TaskRecord['promptHints']) => void
+  onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void
   onCustomTaskEnqueued?: (task: { taskId: string }) => void
   onPartialImage?: (partial: { image: string; partialImageIndex?: number; requestIndex?: number; final?: boolean }) => void
 }
 
 export interface CallApiResult {
+  searchGrounding?: ImageSearchGrounding[]
   /** base64 data URL 列表 */
   images: string[]
   /** 并发拆分时的部分失败信息（成功 ≥1 张但有失败时存在），全成功 / 全失败时 undefined */
@@ -51,7 +74,9 @@ export function isDataUrl(value: unknown): value is string {
 }
 
 export function normalizeBase64Image(value: string, fallbackMime: string): string {
-  return value.startsWith('data:') ? value : `data:${fallbackMime};base64,${value}`
+  if (value.startsWith('data:')) return value
+  const mime = value.startsWith('/9j/') ? 'image/jpeg' : value.startsWith('iVBORw0KGgo') ? 'image/png' : value.startsWith('UklGR') ? 'image/webp' : fallbackMime
+  return `data:${mime};base64,${value}`
 }
 
 export function getResponsesImageResultBase64(result: ResponsesOutputItem['result']): string | undefined {
@@ -111,6 +136,8 @@ export let IMAGE_FETCH_CORS_HINT = i18n.t("errors.imageFetchCorsHint")
 export let STREAMING_UNSUPPORTED_HINT = i18n.t("upstreamSync.hintThisApiMayNotSupportStreamingTry")
 export let STREAMING_FORMAT_HINT = i18n.t("upstreamSync.hintTheApiReturnedAnUnreadableStreamFormat")
 export let TRANSPARENT_BACKGROUND_UNSUPPORTED_HINT = i18n.t("upstreamSync.hintThisApiDoesNotSupportNativeTransparent")
+const IMAGE_TOOL_DROPPED_ERROR = /Tool choice 'required' must be specified with 'tools' parameter\./i
+export const IMAGE_TOOL_DROPPED_HINT = '提示：当前使用的 API 可能未正确转发图像生成工具，请尝试更换支持该工具的接口或模型。'
 
 const LEGACY_IMAGE_FETCH_CORS_HINTS: ReadonlyArray<string> = [
   IMAGE_FETCH_CORS_HINT,
@@ -140,10 +167,22 @@ export function maybeAppendTransparentBackgroundHint(message: string): string {
   return `${message}\n${TRANSPARENT_BACKGROUND_UNSUPPORTED_HINT}`
 }
 
+/** 部分 API 转发 Responses 请求时会丢弃 image_generation 工具，却保留 tool_choice，服务端因此报错 */
+export function maybeAppendImageToolDroppedHint(message: string): string {
+  if (!IMAGE_TOOL_DROPPED_ERROR.test(message)) return message
+  return `${message}\n${IMAGE_TOOL_DROPPED_HINT}`
+}
+
+/** 请求超时中止时使用的原因，替代浏览器默认的英文“signal is aborted without reason”；仍为 AbortError，不改变错误分类 */
+export function createRequestTimeoutError(timeoutSeconds: number) {
+  return new DOMException(`请求超时：超过 ${timeoutSeconds} 秒仍未完成，请稍后重试或提高超时时间。`, 'AbortError')
+}
+
 /** 排除明确与流式无关的状态码后追加提示 */
 export function maybeAppendStreamingHint(message: string, status: number, streamImages?: boolean): string {
   const transparentMessage = maybeAppendTransparentBackgroundHint(message)
   if (transparentMessage !== message) return transparentMessage
+  if (IMAGE_TOOL_DROPPED_ERROR.test(message)) return message
   if (!streamImages) return message
   if (status === 401 || status === 403 || status === 404 || status === 408 || status === 429 || status >= 500) {
     return message
@@ -194,7 +233,7 @@ async function downloadImageUrlAsDataUrl(url: string, fallbackMime: string, sign
 
   let response: Response
   try {
-    response = await fetch(url, {
+    response = await apiFetch(url, {
       cache: 'no-store',
       credentials: 'omit',
       referrerPolicy: 'no-referrer',
@@ -202,6 +241,8 @@ async function downloadImageUrlAsDataUrl(url: string, fallbackMime: string, sign
     })
   } catch (err) {
     if (err instanceof TypeError) {
+      // 客户端由 Rust 侧发出请求，不存在跨域问题，也不需要 no-cors 探测
+      if (isTauri) throw new Error(`图片链接下载失败（可能因链接过期或网络异常）。${IMAGE_FETCH_CORS_HINT}`)
       const probe = await probeNoCorsReachability(url)
       if (probe === 'opaque') {
         throw new Error(i18n.t('upstreamSync.message44', { value0: IMAGE_FETCH_CORS_HINT }))
@@ -222,12 +263,32 @@ async function downloadImageUrlAsDataUrl(url: string, fallbackMime: string, sign
   return blobToDataUrl(blob, fallbackMime)
 }
 
+const MODERATION_STAGE_LABELS: Record<string, string> = {
+  input: '提示词或参考图',
+  output: '生成结果',
+}
+
+/** moderation_blocked 错误可能附带拦截阶段和粗粒度类别 */
+export function appendModerationDetails(message: string, details: unknown): string {
+  if (!details || typeof details !== 'object') return message
+  const record = details as Record<string, unknown>
+  const stage = typeof record.moderation_stage === 'string' ? MODERATION_STAGE_LABELS[record.moderation_stage] : undefined
+  const categories = Array.isArray(record.categories)
+    ? record.categories.filter((item): item is string => typeof item === 'string' && Boolean(item))
+    : []
+  const parts = [
+    stage ? `拦截来源：${stage}` : '',
+    categories.length ? `类别：${categories.join('、')}` : '',
+  ].filter(Boolean)
+  return parts.length ? `${message}\n${parts.join('；')}` : message
+}
+
 export async function getApiErrorMessage(response: Response): Promise<string> {
   let errorMsg = `HTTP ${response.status}`
   const textResponse = response.clone()
   try {
     const errJson = await response.json()
-    if (errJson.error?.message) errorMsg = errJson.error.message
+    if (errJson.error?.message) errorMsg = appendModerationDetails(errJson.error.message, errJson.error.moderation_details)
     else if (typeof errJson.detail === 'string') errorMsg = errJson.detail
     else if (Array.isArray(errJson.detail)) errorMsg = errJson.detail.map((item: unknown) => typeof item === 'string' ? item : JSON.stringify(item)).join('\n')
     else if (typeof errJson.error === 'string') errorMsg = errJson.error
@@ -251,8 +312,8 @@ export function pickActualParams(source: unknown): Partial<TaskParams> {
   if (record.quality === 'auto' || record.quality === 'low' || record.quality === 'medium' || record.quality === 'high' || record.quality === 'xhigh' || record.quality === 'max') {
     actualParams.quality = record.quality
   }
-  if (record.output_format === 'png' || record.output_format === 'jpeg' || record.output_format === 'webp') {
-    actualParams.output_format = record.output_format
+  if (OUTPUT_FORMATS.includes(record.output_format as TaskParams['output_format'])) {
+    actualParams.output_format = record.output_format as TaskParams['output_format']
   }
   if (typeof record.output_compression === 'number') actualParams.output_compression = record.output_compression
   if (record.moderation === 'auto' || record.moderation === 'low') actualParams.moderation = record.moderation
@@ -274,3 +335,36 @@ function refreshErrorHints() {
 }
 i18n.on("languageChanged", refreshErrorHints)
 i18n.on("initialized", refreshErrorHints)
+
+export function mergeConcurrentApiResults(results: PromiseSettledResult<CallApiResult>[]): CallApiResult {
+  const successfulResults = results
+    .filter((result): result is PromiseFulfilledResult<CallApiResult> => result.status === 'fulfilled')
+    .map((result) => result.value)
+  if (!successfulResults.length) {
+    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')!
+    throw firstError.reason
+  }
+
+  const images = successfulResults.flatMap((result) => result.images)
+  const actualParamsList = successfulResults.flatMap((result) =>
+    result.actualParamsList?.length ? result.actualParamsList : result.images.map(() => result.actualParams),
+  )
+  const revisedPrompts = successfulResults.flatMap((result) =>
+    result.revisedPrompts?.length ? result.revisedPrompts : result.images.map(() => undefined),
+  )
+  const rawImageUrls = successfulResults.flatMap((result) => result.rawImageUrls ?? [])
+  const searchGrounding = successfulResults.flatMap((result) => result.searchGrounding ?? [])
+  const failedRequests = results.flatMap((result, requestIndex) =>
+    result.status === 'rejected' ? [{ requestIndex, error: result.reason instanceof Error ? result.reason.message : String(result.reason) }] : [],
+  )
+
+  return {
+    images,
+    actualParams: mergeActualParams(successfulResults[0].actualParams ?? {}, { n: images.length }),
+    actualParamsList,
+    revisedPrompts,
+    ...(rawImageUrls.length ? { rawImageUrls } : {}),
+    ...(searchGrounding.length ? { searchGrounding } : {}),
+    ...(failedRequests.length ? { failedRequests } : {}),
+  }
+}

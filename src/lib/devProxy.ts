@@ -1,3 +1,4 @@
+import { isTauri } from './platform'
 import { readRuntimeEnv } from './runtimeEnv'
 
 export interface DevProxyConfig {
@@ -10,7 +11,7 @@ export interface DevProxyConfig {
 
 const DEFAULT_PROXY_PREFIX = '/api-proxy'
 
-export function normalizeBaseUrl(baseUrl: string): string {
+export function normalizeBaseUrl(baseUrl: string, apiVersion = 'v1'): string {
   const trimmed = baseUrl.trim()
   if (!trimmed) return ''
 
@@ -23,11 +24,11 @@ export function normalizeBaseUrl(baseUrl: string): string {
     if (trimmed.endsWith('/')) return `${url.origin}${url.pathname.replace(/\/+$/, '/')}`
 
     const pathSegments = url.pathname.split('/').filter(Boolean)
-    const v1Index = pathSegments.indexOf('v1')
-    const normalizedSegments = v1Index >= 0
-      ? pathSegments.slice(0, v1Index + 1)
+    const versionIndex = pathSegments.indexOf(apiVersion)
+    const normalizedSegments = versionIndex >= 0
+      ? pathSegments.slice(0, versionIndex + 1)
       : pathSegments.length
-        ? [...pathSegments, 'v1']
+        ? [...pathSegments, apiVersion]
         : []
     const pathname = normalizedSegments.length ? `/${normalizedSegments.join('/')}` : ''
     return `${url.origin}${pathname}`
@@ -61,6 +62,7 @@ export function buildApiUrl(
   path: string,
   proxyConfig?: DevProxyConfig | null,
   useApiProxy = false,
+  apiVersion = 'v1',
 ): string {
   const trimmedBaseUrl = baseUrl.trim()
   const endpointPath = path.replace(/^\/+/, '')
@@ -69,14 +71,14 @@ export function buildApiUrl(
     return `${proxyConfig?.prefix ?? DEFAULT_PROXY_PREFIX}/${endpointPath}`
   }
 
-  const normalizedBaseUrl = normalizeBaseUrl(trimmedBaseUrl)
+  const normalizedBaseUrl = normalizeBaseUrl(trimmedBaseUrl, apiVersion)
   if (trimmedBaseUrl.endsWith('/')) {
     return `${normalizedBaseUrl.replace(/\/+$/, '')}/${endpointPath}`
   }
 
-  const apiPath = normalizedBaseUrl.endsWith('/v1')
+  const apiPath = normalizedBaseUrl.endsWith(`/${apiVersion}`)
     ? endpointPath
-    : ['v1', endpointPath].join('/')
+    : [apiVersion, endpointPath].join('/')
 
   return normalizedBaseUrl ? `${normalizedBaseUrl}/${apiPath}` : `/${apiPath}`
 }
@@ -94,6 +96,8 @@ export function readClientDevProxyConfig(): DevProxyConfig | null {
 }
 
 export function isApiProxyAvailable(proxyConfig: DevProxyConfig | null = readClientDevProxyConfig()): boolean {
+  // 客户端不受跨域限制，代理选项隐藏且不生效；已保存的代理设置保持不变，导回网页版时仍然有效
+  if (isTauri) return false
   return readRuntimeEnv(import.meta.env.VITE_API_PROXY_AVAILABLE) === 'true' || Boolean(proxyConfig?.enabled)
 }
 

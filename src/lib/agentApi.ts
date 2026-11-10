@@ -1,15 +1,17 @@
-import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
+import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ImageSearchGrounding, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { compressImageForUpload, dataUrlToBlob } from './canvasImage'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
-import { appendStreamingFormatHint, assertImageInputPayloadSize, fetchImageUrlAsDataUrl, maybeAppendStreamingHint, getApiErrorMessage, isHttpUrl, MIME_MAP, normalizeBase64Image, pickActualParams, getResponsesImageResultBase64, PROMPT_REWRITE_GUARD_PREFIX } from './imageApiShared'
+import { applyGptImage26Params, appendStreamingFormatHint, assertImageInputPayloadSize, createRequestTimeoutError, fetchImageUrlAsDataUrl, maybeAppendImageToolDroppedHint, maybeAppendStreamingHint, getApiErrorMessage, isHttpUrl, MIME_MAP, normalizeBase64Image, pickActualParams, getResponsesImageResultBase64, PROMPT_REWRITE_GUARD_PREFIX } from './imageApiShared'
 import { DEFAULT_RESPONSES_MODEL } from './apiProfiles'
 import i18n from './i18n'
 import { getSakrylleImageRequestParams } from './sakrylleImageSize'
 import { getImageGenerationModel } from './imageModels'
+import { apiFetch } from './platform'
 import { normalizeResponsesOutputItems } from './responsesOutputState'
 import { isEventStreamResponse, readJsonServerSentEvents, throwIfAborted } from './serverSentEvents'
 
 export interface AgentApiResultImage {
+  searchGrounding?: ImageSearchGrounding[]
   toolCallId?: string
   action?: string
   dataUrl: string
@@ -196,6 +198,7 @@ function createImageTool(params: TaskParams, profile: ApiProfile, maskDataUrl?: 
   }
 
   tool.quality = requestParams.quality
+  applyGptImage26Params(tool, params, profile)
 
   if (requestParams.output_format !== 'png' && requestParams.output_compression != null) {
     tool.output_compression = requestParams.output_compression
@@ -727,7 +730,7 @@ async function fetchWithRetry(
     throwIfAborted(...signals)
     try {
       const init = await buildInit()
-      const response = await fetch(url, init)
+      const response = await apiFetch(url, init)
       if (response.ok || !isRetriableHttpStatus(response.status) || attempt === maxAttempts) {
         return response
       }
@@ -766,7 +769,7 @@ export async function callAgentResponsesApi(opts: {
   const useAppManagedImageGeneration = shouldUseAppManagedImageGeneration(profile, settings.profiles)
   const shouldStreamResponse = profile.streamImages === true && !useAppManagedImageGeneration
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  const timeoutId = setTimeout(() => controller.abort(createRequestTimeoutError(profile.timeout)), profile.timeout * 1000)
   const abortFromCaller = () => controller.abort()
   if (signal?.aborted) controller.abort()
   signal?.addEventListener('abort', abortFromCaller, { once: true })
@@ -807,7 +810,7 @@ export async function callAgentResponsesApi(opts: {
       if (useAppManagedImageGeneration && shouldRetryAgentWithoutImageTool(response.status, errorMessage)) {
         response = await requestResponses(false)
       } else {
-        throw new Error(errorMessage)
+        throw new Error(maybeAppendStreamingHint(errorMessage, response.status, profile.streamImages))
       }
     }
 
@@ -817,7 +820,7 @@ export async function callAgentResponsesApi(opts: {
     }
 
     if (shouldStreamResponse && isEventStreamResponse(response)) {
-      return parseAgentStreamResponse(response, mime, controller.signal, signal, onTextDelta, onOutputItems, onImageToolStarted, onImagePartialImage, onImageToolCompleted, onImageToolFailed)
+      return await parseAgentStreamResponse(response, mime, controller.signal, signal, onTextDelta, onOutputItems, onImageToolStarted, onImagePartialImage, onImageToolCompleted, onImageToolFailed)
     }
 
     const rawPayload = await response.json() as unknown
@@ -848,7 +851,7 @@ export async function callAgentConversationTitleApi(opts: {
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  const timeoutId = setTimeout(() => controller.abort(createRequestTimeoutError(profile.timeout)), profile.timeout * 1000)
   const abortFromCaller = () => controller.abort()
   if (signal?.aborted) controller.abort()
   signal?.addEventListener('abort', abortFromCaller, { once: true })
@@ -1103,7 +1106,7 @@ export async function callBatchImageSingle(opts: {
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  const timeoutId = setTimeout(() => controller.abort(createRequestTimeoutError(profile.timeout)), profile.timeout * 1000)
   const abortFromCaller = () => controller.abort()
   if (signal?.aborted) controller.abort()
   signal?.addEventListener('abort', abortFromCaller, { once: true })
@@ -1143,6 +1146,7 @@ export async function callBatchImageSingle(opts: {
     if (!profile.codexCli) {
       tool.size = requestParams.size
     }
+    applyGptImage26Params(tool, params, profile)
     if (requestParams.output_format !== 'png' && requestParams.output_compression != null) {
       tool.output_compression = requestParams.output_compression
     }
@@ -1175,7 +1179,7 @@ export async function callBatchImageSingle(opts: {
 
     if (!response.ok) {
       const errorMsg = await getApiErrorMessage(response)
-      return { batchItemId, image: null, error: maybeAppendStreamingHint(errorMsg, response.status, profile.streamImages) }
+      return { batchItemId, image: null, error: maybeAppendStreamingHint(maybeAppendImageToolDroppedHint(errorMsg), response.status, profile.streamImages) }
     }
 
     // Handle streaming

@@ -20,13 +20,41 @@
   --sakrylle-purple: 145, 129, 189;
   --sidebar: 240 5% 96%;
   --sidebar-foreground: 240 10% 10%;
+  /* 字体由 src/lib/fonts.ts 按设置覆盖并按需加载字体文件，这里是脚本运行前的初始值 */
   --font-ui-sans: 'HarmonyOS Sans SC', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-mono: 'Maple Mono', 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+  --font-mono: 'Maple Mono NF CN', 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
+  /* 顶栏（Header.tsx）的高度，与 .safe-area-top、.safe-header-inner、下边框及窄屏的第二行一致；用于让页面滚动条从顶栏下方开始 */
+  --header-row2-height: 0px;
+  --header-height: calc(var(--safe-area-top) + 3.5rem + 1px + var(--header-row2-height));
+  /* 细滚动条的宽度，也是 [data-page-scroll] 滚动条的宽度：顶栏、输入栏等 fixed 元素按窗口宽度定位，需让出它才能与页面内容对齐 */
+  --page-scrollbar-width: 0px;
   scrollbar-gutter: stable;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --header-height: calc(max(0.5rem, var(--safe-area-top)) + 3.5rem + 1px + var(--header-row2-height));
+  }
+}
+
+/* Sakrylle keeps the second header row through the lg breakpoint (balance, login, mode switch).
+   It collapses to at most max-h-24. Gallery scroll and Agent hide are marked by Header.tsx data-header. */
+@media (max-width: 1023.98px) {
+  :root {
+    --header-row2-height: 6rem;
+  }
+
+  :root[data-header='compact'] {
+    --header-row2-height: 0px;
+  }
+
+  :root[data-header='hidden'] {
+    --header-height: 0px;
+  }
 }
 
 html {
@@ -78,11 +106,6 @@ select,
   -webkit-touch-callout: default;
 }
 
-* {
-  scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
-}
-
 img {
   -webkit-user-drag: none;
   user-select: none;
@@ -101,29 +124,18 @@ body.drag-selecting * {
   user-select: none !important;
 }
 
-
-  html.dark :root {
-    --background: 240 10% 4%;
-    --foreground: 0 0% 98%;
-    --muted: 240 4% 16%;
-    --muted-foreground: 240 5% 65%;
-    --border: 240 4% 22%;
-    --input: 240 4% 22%;
-    --primary: 253 35% 70%;
-    --primary-foreground: 0 0% 100%;
-    --sidebar: 240 5% 12%;
-    --sidebar-foreground: 0 0% 98%;
-  }
-
-  html.dark * {
-    scrollbar-color: #3f3f46 transparent;
-  }
-
-
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
-::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-::-webkit-scrollbar-track { background: transparent; }
+html.dark {
+  --background: 240 10% 4%;
+  --foreground: 0 0% 98%;
+  --muted: 240 4% 16%;
+  --muted-foreground: 240 5% 65%;
+  --border: 240 4% 22%;
+  --input: 240 4% 22%;
+  --primary: 253 35% 70%;
+  --primary-foreground: 0 0% 100%;
+  --sidebar: 240 5% 12%;
+  --sidebar-foreground: 0 0% 98%;
+}
 
 /* 隐藏 number input 的增减按?*/
 input[type="number"]::-webkit-inner-spin-button,
@@ -135,10 +147,43 @@ input[type="number"] {
   -moz-appearance: textfield;
 }
 
+/* 浏览器原生是经典滚动条时（main.tsx 测量后标记 data-classic-scrollbar）改用细滚动条；悬浮滚动条（手机等）不占宽度，保持原样。
+   Chromium 中不设 scrollbar-width / scrollbar-color：设了之后不认 ::-webkit-scrollbar-*，改画带箭头的系统滚动条 */
+:root[data-classic-scrollbar] ::-webkit-scrollbar { width: var(--page-scrollbar-width); height: var(--page-scrollbar-width); }
+:root[data-classic-scrollbar] ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+:root[data-classic-scrollbar] ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+:root[data-classic-scrollbar] ::-webkit-scrollbar-track { background: transparent; }
+html.dark[data-classic-scrollbar] ::-webkit-scrollbar-thumb { background: #3f3f46; }
+html.dark[data-classic-scrollbar] ::-webkit-scrollbar-thumb:hover { background: #52525b; }
 
-  html.dark ::-webkit-scrollbar-thumb { background: #3f3f46; }
-  html.dark ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+/* 经典滚动条下页面在 App 的 [data-page-scroll] 里滚动（见 src/lib/pageScroll.ts）、窗口本身不滚动：
+   窗口滚动条总占着右侧一整列，顶栏和客户端的标题栏盖不住它。悬浮滚动条下仍滚动窗口，保留手机的地址栏收起和下拉刷新 */
+:root[data-classic-scrollbar] {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+  --page-scrollbar-width: 8px;
+}
 
+:root[data-classic-scrollbar] [data-page-scroll] {
+  height: 100dvh;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
+
+:root[data-classic-scrollbar] [data-page-scroll]::-webkit-scrollbar-track { margin-top: var(--header-height); }
+
+/* Firefox 不支持 ::-webkit-scrollbar-*，只能用标准属性画细滚动条 */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+
+  html.dark,
+  html.dark * {
+    scrollbar-color: #3f3f46 transparent;
+  }
+}
 
 @keyframes pulse-border {
   0%, 100% { border-color: #9181bd; }
@@ -171,12 +216,10 @@ input[type="number"] {
   animation: agent-web-search-text-sweep 2.5s linear infinite;
 }
 
-
-  html.dark .agent-web-search-running-text {
-    --agent-web-search-text: #9ca3af;
-    --agent-web-search-highlight: #ffffff;
-  }
-
+html.dark .agent-web-search-running-text {
+  --agent-web-search-text: #9ca3af;
+  --agent-web-search-highlight: #ffffff;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .agent-web-search-running-text {
@@ -278,27 +321,25 @@ input[type="number"] {
   border-radius: 0.75rem;
 }
 
+html.dark .markdown-renderer :where(blockquote) {
+  color: #a1a1aa;
+}
 
-  html.dark .markdown-renderer :where(blockquote) {
-    color: #a1a1aa;
-  }
+html.dark .markdown-renderer :where(a) {
+  color: #c4b8e0;
+}
 
-  html.dark .markdown-renderer :where(a) {
-    color: #c4b8e0;
-  }
+html.dark .markdown-renderer :where(:not(pre) > code) {
+  background: rgba(255, 255, 255, 0.1);
+}
 
-  html.dark .markdown-renderer :where(:not(pre) > code) {
-    background: rgba(255, 255, 255, 0.1);
-  }
+html.dark .markdown-renderer :where(th, td) {
+  border-color: rgba(255, 255, 255, 0.12);
+}
 
-  html.dark .markdown-renderer :where(th, td) {
-    border-color: rgba(255, 255, 255, 0.12);
-  }
-
-  html.dark .markdown-renderer :where(th) {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
+html.dark .markdown-renderer :where(th) {
+  background: rgba(255, 255, 255, 0.06);
+}
 
 .mask-edge-r {
   -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
@@ -369,6 +410,15 @@ input[type="number"] {
   animation: confirm-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* 进度条：总量未知时来回滑动 */
+@keyframes progress-indeterminate {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(250%); }
+}
+.animate-progress-indeterminate {
+  animation: progress-indeterminate 1.2s ease-in-out infinite;
+}
+
 /* 移动端折叠区域收起/展开 */
 .collapse-section {
   display: grid;
@@ -381,6 +431,8 @@ input[type="number"] {
   opacity: 0;
 }
 .collapse-section > .collapse-inner {
+  /* grid 子项默认不小于内容宽度，不换行的长文本（如参数摘要）会撑出容器 */
+  min-width: 0;
   overflow: visible;
 }
 .collapse-section.collapsed > .collapse-inner {
@@ -482,36 +534,34 @@ input[type="number"] {
   box-shadow: inset 0 0 0 1px rgba(125, 108, 176, 0.3);
 }
 
+html.dark .mention-tag {
+  background: rgba(145, 129, 189, 0.16);
+  color: #c4b8e0;
+  border-color: rgba(145, 129, 189, 0.28);
+}
 
-  html.dark .mention-tag {
-    background: rgba(145, 129, 189, 0.16);
-    color: #c4b8e0;
-    border-color: rgba(145, 129, 189, 0.28);
-  }
-
-  html.dark .mention-tag::selection,
+html.dark .mention-tag::selection,
 html.dark .mention-tag *::selection {
-    background: transparent !important;
-    color: inherit !important;
-  }
+  background: transparent !important;
+  color: inherit !important;
+}
 
-  html.dark [contenteditable]::selection,
+html.dark [contenteditable]::selection,
 html.dark [contenteditable] *::selection {
-    background: rgba(145, 129, 189, 0.34);
-    color: inherit;
-  }
+  background: rgba(145, 129, 189, 0.34);
+  color: inherit;
+}
 
-  html.dark .mention-tag:hover {
-    background: rgba(145, 129, 189, 0.26);
-  }
+html.dark .mention-tag:hover {
+  background: rgba(145, 129, 189, 0.26);
+}
 
-  html.dark .mention-tag.selected {
-    background: #9181bd;
-    color: #ffffff;
-    border-color: #c4b8e0;
-    box-shadow: inset 0 0 0 1px rgba(196, 184, 224, 0.4);
-  }
-
+html.dark .mention-tag.selected {
+  background: #9181bd;
+  color: #ffffff;
+  border-color: #c4b8e0;
+  box-shadow: inset 0 0 0 1px rgba(196, 184, 224, 0.4);
+}
 
 /* 修复 iOS/Webkit 上带圆角的滚动容器内容/滚动条溢出的 bug */
 .ios-rounded-scroll-fix {
@@ -717,6 +767,6 @@ html.theme-toggling, html.theme-toggling * { transition: none !important; }
 .settings-api-content [data-select-open] > .glass-panel {
   background-color: rgb(250 248 255 / 98%);
 }
-.dark .settings-api-content [data-select-open] > .glass-panel {
+html.dark .settings-api-content [data-select-open] > .glass-panel {
   background-color: rgb(35 32 43 / 98%);
 }
