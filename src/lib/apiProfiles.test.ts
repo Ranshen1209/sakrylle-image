@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  DEFAULT_FAL_BASE_URL,
   DEFAULT_IMAGES_MODEL,
   DEFAULT_RESPONSES_MODEL,
   DEFAULT_OPENAI_PROFILE_ID,
   DEFAULT_SETTINGS,
+  createDefaultFalProfile,
   createDefaultOpenAIProfile,
   getApiProviderLabel,
   getActiveApiProfile,
@@ -16,6 +18,8 @@ import {
   mergeImportedSettings,
   normalizeApiProfile,
   normalizeSettings,
+  resolveApiProfileModel,
+  splitModelList,
   switchApiProfileProvider,
   validateApiProfile,
 } from './apiProfiles'
@@ -76,6 +80,24 @@ describe('normalizeApiProfile', () => {
 })
 
 describe('normalizeSettings', () => {
+  it('falls back to creating a new task for unknown retry modes', () => {
+    expect(normalizeSettings({}).retryMode).toBe('new')
+    expect(normalizeSettings({ retryMode: 'bogus' }).retryMode).toBe('new')
+    expect(normalizeSettings({ retryMode: 'overwriteFailed' }).retryMode).toBe('overwriteFailed')
+  })
+
+  it('only keeps overwriting any task while successful tasks show the retry button', () => {
+    expect(normalizeSettings({ retryMode: 'overwriteAll' }).retryMode).toBe('overwriteFailed')
+    expect(normalizeSettings({ retryMode: 'overwriteAll', alwaysShowRetryButton: true }).retryMode).toBe('overwriteAll')
+  })
+
+  it('defaults the save location mode to asking and drops invalid values', () => {
+    expect(DEFAULT_SETTINGS.saveLocationMode).toBe('ask')
+    expect(normalizeSettings({}).saveLocationMode).toBe('ask')
+    expect(normalizeSettings({ saveLocationMode: 'bogus' }).saveLocationMode).toBe('ask')
+    expect(normalizeSettings({ saveLocationMode: 'default' }).saveLocationMode).toBe('default')
+  })
+
   it('preserves a non-empty profile description and removes an empty one', () => {
     const settings = normalizeSettings({
       profiles: [
@@ -86,6 +108,32 @@ describe('normalizeSettings', () => {
 
     expect(settings.profiles[0].description).toBe('支持 **Markdown**')
     expect(settings.profiles[1].description).toBeUndefined()
+  })
+
+  it('keeps valid color modes and falls back to following the system', () => {
+    expect(normalizeSettings({ enterSubmit: true }).colorMode).toBe('system')
+    expect(normalizeSettings({ colorMode: 'light' }).colorMode).toBe('light')
+    expect(normalizeSettings({ colorMode: 'dark' }).colorMode).toBe('dark')
+    expect(normalizeSettings({ colorMode: 'bogus' }).colorMode).toBe('system')
+  })
+
+  it('defaults font settings to following the deployment for old data', () => {
+    const settings = normalizeSettings({ enterSubmit: true })
+
+    expect(settings.uiFont).toBe('default')
+    expect(settings.uiFontName).toBe('')
+    expect(settings.monoFont).toBe('default')
+    expect(settings.monoFontName).toBe('')
+  })
+
+  it('keeps valid font settings and drops invalid ones', () => {
+    const settings = normalizeSettings({ uiFont: 'custom', uiFontName: '  Source Han Sans SC ', monoFont: 'bogus', monoFontName: 42 })
+
+    expect(settings.uiFont).toBe('custom')
+    expect(settings.uiFontName).toBe('Source Han Sans SC')
+    expect(settings.monoFont).toBe('default')
+    expect(settings.monoFontName).toBe('')
+    expect(normalizeSettings({ monoFont: 'builtin' }).monoFont).toBe('builtin')
   })
 })
 
@@ -581,6 +629,21 @@ describe('mergePresetImportedSettings', () => {
 
     expect(merged.profiles[0]).toMatchObject({ id: 'source-profile', model: 'model-v2' })
     expect(merged.customProviders[0]).toMatchObject({ id: 'source-provider', submit: { path: 'v2/generate' } })
+  })
+
+  it('syncs a changed SVG authoring model from the deployment', () => {
+    const withSvgModel = (svgModel: string) => {
+      const config = createConfig('model-v1', 'old/generate')
+      return { ...config, profiles: [{ ...config.profiles[0], provider: 'openai', svgModel }], customProviders: [] }
+    }
+    const initial = mergeDefaultImportedSettings(DEFAULT_SETTINGS, withSvgModel('svg-v1'))
+    expect(initial.settings.profiles[0].svgModel).toBe('svg-v1')
+
+    const unlocked = mergeDefaultImportedSettings(initial.settings, withSvgModel('svg-v2'), { previousPresetConfig: initial.presetConfig })
+    expect(unlocked.settings.profiles[0].svgModel).toBe('svg-v2')
+
+    const locked = mergeDefaultImportedSettings(unlocked.settings, withSvgModel('svg-v3'), { previousPresetConfig: unlocked.presetConfig, lockPresetParams: true })
+    expect(locked.settings.profiles[0].svgModel).toBe('svg-v3')
   })
 
   it('keeps the local API key while updating other locked preset parameters', () => {
@@ -1501,30 +1564,7 @@ describe('custom providers', () => {
       ],
     })
 
-    expect(settings.providerOrder).toEqual(['openai', 'sb2api-async', 'custom-alpha', 'custom-beta'])
-  })
-
-  it('drops removed fal profile connection data when migrating to OpenAI-compatible provider', () => {
-    const settings = normalizeSettings({
-      profiles: [{
-        id: 'legacy-fal',
-        name: 'Legacy fal',
-        provider: 'fal',
-        baseUrl: 'https://removed-provider.example',
-        apiKey: 'legacy-key',
-        model: 'openai/gpt-image-2',
-        apiMode: 'images',
-      }],
-    })
-
-    expect(settings.profiles[0]).toMatchObject({
-      id: 'legacy-fal',
-      provider: 'openai',
-      baseUrl: DEFAULT_SETTINGS.baseUrl,
-      apiKey: '',
-      model: DEFAULT_IMAGES_MODEL,
-      apiMode: 'images',
-    })
+    expect(settings.providerOrder).toEqual(['fal', 'openai', 'google', 'xai', 'sb2api-async', 'custom-alpha', 'custom-beta'])
   })
 
   it('keeps active custom providers in Images API mode when legacy apiMode is responses', () => {
@@ -1551,9 +1591,33 @@ describe('custom providers', () => {
     const provider = { id: 'custom-json', name: 'Custom JSON', submit: { path: 'images/generations' } }
     const openaiProfile = createDefaultOpenAIProfile({ apiMode: 'responses', streamImages: true })
 
+    const falProfile = switchApiProfileProvider(openaiProfile, 'fal')
     const customProfile = switchApiProfileProvider(openaiProfile, provider.id, provider)
 
+    expect(falProfile).toMatchObject({ provider: 'fal', apiMode: 'images', streamImages: false, transparentBackgroundMethod: 'api' })
     expect(customProfile).toMatchObject({ provider: provider.id, apiMode: 'images', streamImages: false })
+  })
+
+  it('keeps an explicitly empty fal.ai URL', () => {
+    const profile = normalizeSettings({
+      profiles: [createDefaultFalProfile({ id: 'fal-empty', baseUrl: '' })],
+    }).profiles[0]
+
+    expect(profile.baseUrl).toBe('')
+  })
+
+  it('does not inherit fal URL and model when switching to a custom provider', () => {
+    const provider = importCustomProviderDefinitionFromJson(JSON.stringify({
+      name: 'Custom Provider',
+      template: 'http-image',
+      submit: { path: 'images/generations' },
+    }))
+    const profile = switchApiProfileProvider(createDefaultFalProfile(), provider.id, provider)
+
+    expect(profile.provider).toBe(provider.id)
+    expect(profile.baseUrl).toBe(DEFAULT_SETTINGS.baseUrl)
+    expect(profile.model).toBe(DEFAULT_IMAGES_MODEL)
+    expect(profile.transparentBackgroundMethod).toBe('api')
   })
 
   it('enables Agent submit auto scroll by default', () => {
@@ -1572,6 +1636,28 @@ describe('custom providers', () => {
     expect(DEFAULT_SETTINGS.allowPromptRewrite).toBe(false)
     expect(normalizeSettings({}).allowPromptRewrite).toBe(false)
     expect(normalizeSettings({ allowPromptRewrite: true }).allowPromptRewrite).toBe(true)
+  })
+
+  it('defaults imagePromptHints to true and preserves explicit false', () => {
+    expect(DEFAULT_SETTINGS.imagePromptHints).toBe(true)
+    expect(normalizeSettings({}).imagePromptHints).toBe(true)
+    expect(normalizeSettings({ imagePromptHints: false }).imagePromptHints).toBe(false)
+  })
+
+  it('restores OpenAI-compatible URL after switching through fal.ai', () => {
+    const openaiProfile = createDefaultOpenAIProfile({
+      baseUrl: 'https://api.compat.example.com/v1',
+      model: 'custom-openai-model',
+      apiProxy: false,
+    })
+
+    const falProfile = switchApiProfileProvider(openaiProfile, 'fal')
+    const restoredProfile = switchApiProfileProvider(falProfile, 'openai')
+
+    expect(falProfile.baseUrl).toBe(DEFAULT_FAL_BASE_URL)
+    expect(restoredProfile.baseUrl).toBe('https://api.compat.example.com/v1')
+    expect(restoredProfile.model).toBe('custom-openai-model')
+    expect(restoredProfile.apiProxy).toBe(false)
   })
 
   it('preserves the selected Agent image generation profile', () => {
@@ -1656,5 +1742,24 @@ describe('refresh with production defaults preserves user options', () => {
     const saved = normalizeSettings({ ...initial.settings, profiles: initial.settings.profiles.map(p => ({ ...p, ...patch })) })
     const restored = mergeDefaultImportedSettings(JSON.parse(JSON.stringify(saved)), preset, { previousPresetConfig: initial.presetConfig })
     expect(restored.settings.profiles.find(p => p.id === saved.activeProfileId)).toMatchObject(patch)
+  })
+})
+
+describe('model list', () => {
+  it('normalizes comma separated models', () => {
+    expect(splitModelList('a,b ，c, a,')).toEqual(['a', 'b', 'c'])
+    expect(normalizeApiProfile({ model: 'a,b ，c' }).model).toBe('a, b, c')
+  })
+
+  it('resolves selected model and falls back to the first one', () => {
+    const profile = normalizeApiProfile({ model: 'a, b', selectedModel: 'b' })
+    expect(resolveApiProfileModel(profile).model).toBe('b')
+    expect(resolveApiProfileModel(profile, 'a').model).toBe('a')
+    expect(resolveApiProfileModel({ ...profile, selectedModel: 'x' }).model).toBe('a')
+  })
+
+  it('returns the selected model for the active profile', () => {
+    const profile = normalizeApiProfile({ id: 'p1', model: 'a,b', selectedModel: 'b' })
+    expect(getActiveApiProfile({ profiles: [profile], activeProfileId: 'p1' }).model).toBe('b')
   })
 })

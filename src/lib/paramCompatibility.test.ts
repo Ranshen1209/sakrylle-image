@@ -1,9 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PARAMS } from '../types'
-import { createDefaultOpenAIProfile, DEFAULT_SETTINGS, normalizeSettings } from './apiProfiles'
-import { getOutputImageLimitForSettings, normalizeParamsForSettings } from './paramCompatibility'
+import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_SETTINGS, normalizeSettings } from './apiProfiles'
+import { getOutputImageLimitForSettings, getTaskParamSupport, normalizeParamsForSettings } from './paramCompatibility'
 
 describe('parameter compatibility', () => {
+  it.each([
+    ['gemini-nano-banana-2.1', true],
+    ['gemini-3-pro-image', false],
+    ['gemini-2.5-flash-image', false],
+  ])('captures supported Google controls for %s', (model, thinking) => {
+    const profile = createDefaultOpenAIProfile({ provider: 'google', model })
+    expect(getTaskParamSupport(DEFAULT_SETTINGS, profile)).toEqual({ thinking, complexity: false })
+  })
+
+  it.each(['gpt-image-2.5', 'gpt-image-2.6'])('uses the Responses image tool model for complexity: %s', (imageGenerationModel) => {
+    const profile = createDefaultOpenAIProfile({ apiMode: 'responses', model: 'example-text-model', imageGenerationModel })
+    expect(getTaskParamSupport(DEFAULT_SETTINGS, profile)).toEqual({ thinking: false, complexity: imageGenerationModel === 'gpt-image-2.6' })
+  })
+
   it('limits OpenAI output count to 10', () => {
     const openAIProfile = createDefaultOpenAIProfile({ apiKey: 'test-key', streamImages: false })
     const settings = normalizeSettings({
@@ -16,6 +30,18 @@ describe('parameter compatibility', () => {
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 12 }, settings).n).toBe(10)
   })
 
+  it('limits fal.ai output count to 4', () => {
+    const falProfile = createDefaultFalProfile({ apiKey: 'fal-key' })
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [falProfile],
+      activeProfileId: falProfile.id,
+    })
+
+    expect(getOutputImageLimitForSettings(settings)).toBe(4)
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 8 }, settings).n).toBe(4)
+  })
+
   it('keeps OpenAI streaming output count so the request can disable streaming', () => {
     const openAIProfile = createDefaultOpenAIProfile({ apiKey: 'test-key', streamImages: true })
     const settings = normalizeSettings({
@@ -25,6 +51,18 @@ describe('parameter compatibility', () => {
     })
 
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, n: 4 }, settings).n).toBe(4)
+  })
+
+  it('only replaces fal.ai auto size in text-to-image mode', () => {
+    const falProfile = createDefaultFalProfile({ apiKey: 'fal-key' })
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [falProfile],
+      activeProfileId: falProfile.id,
+    })
+
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, size: 'auto' }, settings).size).toBe('1360x1024')
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, size: 'auto' }, settings, { hasInputImages: true }).size).toBe('auto')
   })
 
   it('forces quality back to default when Codex CLI mode is on', () => {
@@ -72,6 +110,18 @@ describe('parameter compatibility', () => {
     })
   })
 
+  it('does not apply Codex CLI parameter limits to fal.ai', () => {
+    const profile = createDefaultFalProfile({ codexCli: true })
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      codexCli: true,
+      profiles: [profile],
+      activeProfileId: profile.id,
+    })
+
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, size: '2048x2048' }, settings).size).toBe('2048x2048')
+  })
+
   it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] as const)('keeps 2.5 quality levels for %s', (model) => {
     const profile = createDefaultOpenAIProfile({ model })
     const settings = normalizeSettings({ ...DEFAULT_SETTINGS, profiles: [profile] })
@@ -82,6 +132,14 @@ describe('parameter compatibility', () => {
 
   it.each(['openai/gpt-image-2.5/sunburst', 'openai/gpt-image-2.5/flare'] as const)('keeps vendor-namespaced 2.5 quality levels for %s', (model) => {
     const profile = createDefaultOpenAIProfile({ model })
+    const settings = normalizeSettings({ ...DEFAULT_SETTINGS, profiles: [profile], activeProfileId: profile.id })
+
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, quality: 'xhigh' }, settings).quality).toBe('xhigh')
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, quality: 'max' }, settings).quality).toBe('max')
+  })
+
+  it.each(['openai/gpt-image-2.5/sunburst', 'openai/gpt-image-2.5/flare'] as const)('keeps fal.ai 2.5 quality levels for %s', (model) => {
+    const profile = createDefaultFalProfile({ model })
     const settings = normalizeSettings({ ...DEFAULT_SETTINGS, profiles: [profile], activeProfileId: profile.id })
 
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, quality: 'xhigh' }, settings).quality).toBe('xhigh')
@@ -103,7 +161,7 @@ describe('parameter compatibility', () => {
 })
 
 describe('retained model and default regressions', () => {
-it('falls back to high when an older image model receives a 2.5 quality level', () => {
+  it('falls back to high when an older image model receives a 2.5 quality level', () => {
     const profile = createDefaultOpenAIProfile({ model: 'gpt-image-2' })
     const settings = normalizeSettings({ ...DEFAULT_SETTINGS, profiles: [profile] })
 

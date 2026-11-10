@@ -5,33 +5,35 @@ type TaskLifecyclePatch = Pick<TaskRecord, 'status' | 'error' | 'finishedAt' | '
 type ActualParams = Partial<TaskParams>
 type ImageSize = { width?: number; height?: number }
 
-export function createTaskDonePatch(task: Pick<TaskRecord, 'createdAt'>, now: number): TaskLifecyclePatch {
+export function createTaskDonePatch(task: Pick<TaskRecord, 'createdAt' | 'startedAt'>, now: number): TaskLifecyclePatch {
   return {
     status: 'done',
     error: null,
     finishedAt: now,
-    elapsed: now - task.createdAt,
+    elapsed: now - (task.startedAt ?? task.createdAt),
   }
 }
 
-export function createTaskErrorPatch(task: Pick<TaskRecord, 'createdAt'>, error: string, now: number): TaskLifecyclePatch {
+export function createTaskErrorPatch(task: Pick<TaskRecord, 'createdAt' | 'startedAt'>, error: string, now: number): TaskLifecyclePatch {
   return {
     status: 'error',
     error,
     finishedAt: now,
-    elapsed: now - task.createdAt,
+    elapsed: now - (task.startedAt ?? task.createdAt),
   }
 }
 
 export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now: number) {
   const interruptedTasks: TaskRecord[] = []
   const updatedTasks = tasks.map((task) => {
-    if (task.status !== 'running' || task.customTaskId) return task
+    const isOpenAITask = (task.apiProvider ?? 'openai') !== 'fal'
+    if (task.status !== 'running' || !isOpenAITask || task.customTaskId) return task
 
     const updated: TaskRecord = {
       ...task,
       ...createTaskErrorPatch(task, SENTINEL_OPENAI_INTERRUPTED, now),
-      elapsed: Math.max(0, now - task.createdAt),
+      falRecoverable: false,
+      elapsed: Math.max(0, now - (task.startedAt ?? task.createdAt)),
     }
     interruptedTasks.push(updated)
     return updated
@@ -74,13 +76,13 @@ export function deriveAgentImageActualParams(params: ActualParams | undefined, s
 }
 
 export function deriveGalleryActualParams(
-  _provider: ApiProvider,
+  provider: ApiProvider,
   isAsyncCustomTask: boolean,
   resultParams: ActualParams | undefined,
   paramsList: Array<ActualParams | undefined> | undefined,
   outputCount: number,
 ): ActualParams | undefined {
-  if (isAsyncCustomTask) return firstActualParams(paramsList)
+  if (provider === 'fal' || isAsyncCustomTask) return firstActualParams(paramsList)
   const firstParams = firstActualParams(paramsList)
   return {
     ...resultParams,

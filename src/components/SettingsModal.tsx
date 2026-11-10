@@ -1,14 +1,21 @@
 import i18n from '../lib/i18n'
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
+import { readText } from '@tauri-apps/plugin-clipboard-manager'
 import { normalizeBaseUrl } from '../lib/api'
 import { customProviderSupportsNativeTransparentBackground } from '../lib/customProviderCapabilities'
-import { hasActiveDataOperations } from '../lib/dataOperations'
+import { hasActiveDataOperations, trackDataTransfer } from '../lib/dataOperations'
+import { useSettingsDataTransfer } from '../lib/dataProgress'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
+import { DEFAULT_SVG_MODEL, getImageModelFamily, isGptImage26PlusModel } from '../lib/imageModels'
+import { isTauri } from '../lib/platform'
 import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
 import {
   createDefaultOpenAIProfile,
+  NATIVE_IMAGE_PROVIDERS,
+  DEFAULT_FAL_BASE_URL,
+  DEFAULT_FAL_MODEL,
   DEFAULT_IMAGES_MODEL,
   DEFAULT_OPENAI_PROFILE_ID,
   DEFAULT_OPENAI_PROFILE_NAME,
@@ -24,13 +31,13 @@ import {
   isOpenAICompatibleProvider,
   mergeImportedSettings,
   normalizeAgentMaxToolRounds,
-  normalizeCustomProviderDefinition,
   normalizeSettings,
   normalizeStreamPartialImages,
+  resolveApiProfileModel,
+  splitModelList,
   switchApiProfileProvider,
 } from '../lib/apiProfiles'
 import {
-  getDefaultPresetBaseUrl,
   getDefaultPresetProfileId,
   getPresetProfileDescription,
   getPresetProfileIds,
@@ -47,6 +54,7 @@ import { canUseOAuthForProfile } from '../lib/oauthFallback'
 import { getSelectedGroups, setSelectedGroup, fetchResponsesApiGroups, getSelectedGroupId, getGroupAccessToken, resolveSelectedGroupId, ensureSelectedGroupId, getGroupsForApiMode, getAvailableGroups } from '../lib/groupSelection'
 import { fetchModelsWithToken, isGptTextModelId, type SakrylleModel } from '../lib/sakrylleAccount'
 import { createCustomProfileImportUrl } from '../lib/profileImportUrl'
+import { getProfileImportBaseUrl, handledImportLinks } from '../lib/importLink'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, REASONING_EFFORT_VALUES, type AgentApiConfigMode, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ReasoningEffort, type ZipDownloadRoute } from '../types'
 import {
@@ -55,22 +63,36 @@ import {
 } from '../lib/settingsCustomProvider'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
-import { DEFAULT_DROPDOWN_MAX_HEIGHT, getDropdownMaxHeight } from '../lib/dropdown'
+import { updateModalScrollRef, useReleaseUpdates } from '../hooks/useReleaseUpdates'
+import { DEFAULT_DROPDOWN_MAX_HEIGHT, DROPDOWN_PANEL_CLASS, DROPDOWN_SCROLL_CLASS, getDropdownMaxHeight } from '../lib/dropdown'
+import {
+  buildCustomProvider,
+  getApiProfileDeleteBlock,
+  getCustomProviderDeleteBlock,
+  getDefaultModelForMode,
+  isAsyncCustomProvider,
+  isProfileApiProxyEligible,
+  newId,
+  prepareSettingsForCommit,
+  removeApiProfile,
+  removeCustomProvider,
+} from '../lib/settingsActions'
 import Select from './Select'
 import { Checkbox } from './Checkbox'
 import ViewportTooltip from './ViewportTooltip'
-import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon } from './icons'
+import { ChevronDownIcon, CloseIcon, CopyIcon, PlusIcon, TrashIcon, GithubIcon, ExportIcon, ImportIcon, DragHandleIcon, LinkIcon, SparklesIcon } from './icons'
 import { TooltipButton } from './TooltipButton'
 import GeneralSettingsTab from './settings/GeneralSettingsTab'
+import AppearanceSettingsTab from './settings/AppearanceSettingsTab'
 import AgentSettingsTab from './settings/AgentSettingsTab'
+import SkillSettingsSection from './settings/SkillSettingsSection'
+import FontLicensesModal from './settings/FontLicensesModal'
 import CustomProviderModal from './settings/CustomProviderModal'
 import ProfileImportUrlModal, { type CopyImportUrlOptions } from './settings/ProfileImportUrlModal'
 import ZipDownloadRouteModal, { getZipDownloadRouteOptions } from './settings/ZipDownloadRouteModal'
+import StorageInfoSection from './settings/StorageInfoSection'
+import AboutSettingsTab from './settings/AboutSettingsTab'
 import MarkdownRenderer from './MarkdownRenderer'
-
-function newId(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-}
 
 const ADD_CUSTOM_PROVIDER_VALUE = '__add_custom_provider__'
 
@@ -129,6 +151,7 @@ function isPristineNewOpenAIProfile(profile: ApiProfile) {
     profile.apiKey === '' &&
     profile.model === DEFAULT_IMAGES_MODEL &&
     profile.imageGenerationModel === DEFAULT_IMAGES_MODEL &&
+    !profile.svgModel &&
     profile.timeout === DEFAULT_SETTINGS.timeout &&
     profile.apiMode === 'images' &&
     profile.reasoningEffort === undefined &&
@@ -152,15 +175,6 @@ function getImportedProfileFromMergedSettings(
   return nextSettings.profiles.find((profile) => !previousProfileIds.has(profile.id)) ?? nextSettings.profiles[0]
 }
 
-function isAsyncCustomProvider(provider: CustomProviderDefinition | null | undefined) {
-  return Boolean(provider?.poll || provider?.submit.taskIdPath || provider?.editSubmit?.taskIdPath)
-}
-
-function isProfileApiProxyEligible(settings: AppSettings, profile: ApiProfile) {
-  if (!isOpenAICompatibleProvider(settings, profile.provider)) return false
-  const customProvider = getCustomProviderDefinition(settings, profile.provider)
-  return !isAsyncCustomProvider(customProvider)
-}
 
 function GroupSelector({ mode, label, hint, onGroupChange }: { mode: 'images' | 'responses'; label: string; hint: string; onGroupChange?: () => void }) {
   const { t } = useTranslation()
@@ -406,6 +420,10 @@ export default function SettingsModal() {
   const settingsScrollBoundaryRef = useRef<HTMLDivElement>(null)
   const customProviderScrollBoundaryRef = useRef<HTMLDivElement>(null)
   const zipDownloadRouteScrollBoundaryRef = useRef<HTMLDivElement>(null)
+  const fontLicensesScrollBoundaryRef = useRef<HTMLDivElement>(null)
+  const tabScrollRef = useRef<HTMLDivElement>(null)
+  // 各选项卡共用一个滚动容器，按选项卡记录滚动位置，切换时各自恢复
+  const tabScrollTopsRef = useRef<Partial<Record<SettingsTab, number>>>({})
   
   const [draft, setDraft] = useState<AppSettings>(normalizeSettings(settings))
   const [timeoutInput, setTimeoutInput] = useState(String(getActiveApiProfile(settings).timeout))
@@ -416,6 +434,7 @@ export default function SettingsModal() {
   const [profileMenuMaxHeight, setProfileMenuMaxHeight] = useState(DEFAULT_DROPDOWN_MAX_HEIGHT)
   const [showCustomProviderImport, setShowCustomProviderImport] = useState(false)
   const [showZipDownloadRouteManager, setShowZipDownloadRouteManager] = useState(false)
+  const [showFontLicenses, setShowFontLicenses] = useState(false)
   const [editingCustomProviderId, setEditingCustomProviderId] = useState<string | null>(null)
   const [customProviderJson, setCustomProviderJson] = useState(DEFAULT_CUSTOM_PROVIDER_JSON)
   const [customProviderImportError, setCustomProviderImportError] = useState<string | null>(null)
@@ -428,8 +447,9 @@ export default function SettingsModal() {
   const [importTasks, setImportTasks] = useState(true)
   const [clearConfig, setClearConfig] = useState(true)
   const [clearTasks, setClearTasks] = useState(true)
-  const [isExportingData, setIsExportingData] = useState(false)
-  const [isImportingData, setIsImportingData] = useState(false)
+  const dataTransferMode = useSettingsDataTransfer((s) => s.mode)
+  const isExportingData = dataTransferMode === 'export'
+  const isImportingData = dataTransferMode === 'import'
   const [isImportingJson, setIsImportingJson] = useState(false)
   const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null)
   const [dragOverProfileId, setDragOverProfileId] = useState<string | null>(null)
@@ -493,19 +513,31 @@ export default function SettingsModal() {
   const activePresetDescription = getPresetProfileDescription(activeProfile.id)
   const activeProfileLocked = isPresetProfileLocked(activeProfile.id)
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
-  const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible
+  const nativeImageProvider = activeProfile.provider === 'google' || activeProfile.provider === 'xai' ? NATIVE_IMAGE_PROVIDERS[activeProfile.provider] : null
+  const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal' || Boolean(nativeImageProvider)
   const activeCustomProvider = getCustomProviderDefinition(draft, activeProfile.provider)
-  const activeCustomProviderSupportsNativeTransparentBackground = !activeCustomProvider || customProviderSupportsNativeTransparentBackground(activeCustomProvider)
+  const resolvedActiveProfile = resolveApiProfileModel(activeProfile, undefined, activeCustomProvider)
+  const activeImageFamily = getImageModelFamily(resolvedActiveProfile)
+  const activeCustomProviderSupportsNativeTransparentBackground = !activeImageFamily && (!activeCustomProvider || customProviderSupportsNativeTransparentBackground(activeCustomProvider, resolvedActiveProfile.model))
   const activeProfileApiProxyEligible = isProfileApiProxyEligible(draft, activeProfile)
   const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
+  const isResponsesProfile = activeProfile.provider === 'openai' && (activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses'
+  // 只有 GPT Image 2.6 及以上能输出 SVG，才需要填写编写 SVG 的文本模型
+  // fal.ai 的 SVG 暂不开放，原因见 falAiImageApi 中的说明；恢复时把 fal 加回判断
+  const showSvgModel = activeProfile.provider !== 'fal' && !activeProfile.codexCli && (isResponsesProfile
+    ? isGptImage26PlusModel(activeProfile.imageGenerationModel ?? '')
+    : splitModelList(activeProfile.model).some(isGptImage26PlusModel))
   const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
   const apiProxyEnabled = apiProxyAvailable && activeProfileApiProxyEligible && apiProxyChecked
-  const defaultProviderOrder = ['openai', 'sb2api-async', ...draft.customProviders.map(p => p.id)]
+  const defaultProviderOrder = ['openai', 'google', 'xai', 'sb2api-async', 'fal', ...draft.customProviders.map(p => p.id)]
   const providerOrder = draft.providerOrder || defaultProviderOrder
 
   const unorderedProviderOptions = [
     { label: i18n.t("upstreamSync.openaiCompatibleApi"), value: 'openai', draggable: true },
+    { label: 'Google', value: 'google', draggable: true },
+    { label: 'xAI', value: 'xai', draggable: true },
     { label: i18n.t("upstreamSync.sub2apiAsync"), value: 'sb2api-async', draggable: true },
+    { label: 'fal.ai', value: 'fal', draggable: true },
     ...draft.customProviders.map((provider) => {
       const actions = [
         ...(!presetConfigOnly && !isPresetProviderLocked(provider.id) ? [{ label: i18n.t("contextMenu.edit"), onClick: () => openEditCustomProvider(provider) }] : []),
@@ -562,9 +594,6 @@ export default function SettingsModal() {
     commitSettings({ ...draft, providerOrder: nextOrder })
   }
 
-  const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
-    apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
-
   const enabledZipDownloadRouteCount = getZipDownloadRouteOptions()
     .filter((option) => draft.zipDownloadRoutes.includes(option.route))
     .length
@@ -593,16 +622,19 @@ export default function SettingsModal() {
     value: profile.id,
   }))
 
-  const wasSettingsOpenRef = useRef(false)
+  // 草稿所对应的已保存设置。设置页打开期间设置被别处修改（例如 AI 工具通过命令行）时按新设置重建草稿，
+  // 避免之后提交草稿时把别处的修改改回去
+  const draftSourceRef = useRef<AppSettings | null>(null)
 
   useEffect(() => {
     if (!showSettings) {
-      wasSettingsOpenRef.current = false
+      draftSourceRef.current = null
+      tabScrollTopsRef.current = {}
       return
     }
-    if (wasSettingsOpenRef.current) return
+    if (draftSourceRef.current === settings) return
 
-    wasSettingsOpenRef.current = true
+    draftSourceRef.current = settings
     const normalizedSettings = normalizeSettings(settings)
     const displaySettings = normalizedSettings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId && normalizedSettings.profiles.some((profile) => profile.id === reusedTaskApiProfileId)
       ? normalizeSettings({ ...normalizedSettings, activeProfileId: reusedTaskApiProfileId })
@@ -611,9 +643,10 @@ export default function SettingsModal() {
       ...displaySettings,
       profiles: displaySettings.profiles.map((profile) => ({
         ...profile,
+        // 客户端不使用代理，但保留已保存的设置，导回网页版时仍然有效
         apiProxy: isProfileApiProxyEligible(displaySettings, profile) && apiProxyAvailable
           ? (apiProxyLocked || profile.apiProxy)
-          : false,
+          : isTauri && profile.apiProxy,
       })),
     })
     setDraft(nextDraft)
@@ -625,9 +658,18 @@ export default function SettingsModal() {
     setTimeoutInput(String(activeProfile.timeout))
   }, [activeProfile.id, activeProfile.timeout])
 
+  // 设置打开期间首次保存（例如导出备份）时会询问并写入保存方式，同步到草稿，避免之后提交草稿时被改回
+  useEffect(() => {
+    setDraft((prev) => prev.saveLocationMode === settings.saveLocationMode ? prev : { ...prev, saveLocationMode: settings.saveLocationMode })
+  }, [settings.saveLocationMode])
+
   useEffect(() => {
     if (showSettings && settingsTabRequest) setActiveTab(settingsTabRequest)
   }, [settingsTabRequest, showSettings])
+
+  useLayoutEffect(() => {
+    if (tabScrollRef.current) tabScrollRef.current.scrollTop = tabScrollTopsRef.current[activeTab] ?? 0
+  }, [activeTab, showSettings])
 
   const updateProfileMenuMaxHeight = useCallback(() => {
     if (!profileMenuTriggerRef.current) return
@@ -694,37 +736,16 @@ export default function SettingsModal() {
   }
 
   const commitSettings = (nextDraft: AppSettings) => {
-    const normalizedProfiles = nextDraft.profiles.map((profile) => {
-      const nextApiProxy = isProfileApiProxyEligible(nextDraft, profile) && apiProxyAvailable ? (apiProxyLocked || profile.apiProxy) : false
-      const shouldKeepEmptyBaseUrl = nextApiProxy && !profile.baseUrl.trim()
-      const emptyBaseUrlFallback = profile.id === defaultProfileId
-        ? getDefaultPresetBaseUrl()
-        : DEFAULT_SETTINGS.baseUrl
-      const normalizedBaseUrl = shouldKeepEmptyBaseUrl ? '' : normalizeBaseUrl(profile.baseUrl.trim() || emptyBaseUrlFallback)
-      const defaultModel = getDefaultModelForMode(profile.apiMode)
-      return {
-        ...profile,
-        name: profile.name.trim() || (profile.id === defaultProfileId ? DEFAULT_OPENAI_PROFILE_NAME : t('settings.api.newProfileName')),
-        baseUrl: normalizedBaseUrl,
-        model: profile.model.trim() || defaultModel,
-        timeout: Number(profile.timeout) || DEFAULT_SETTINGS.timeout,
-        apiProxy: nextApiProxy,
-        codexCli: isOpenAICompatibleProvider(nextDraft, profile.provider) ? profile.codexCli : false,
-        streamImages: profile.provider === 'openai' ? profile.streamImages : false,
-        streamChatCompletionsImage: profile.provider === 'openai' ? profile.streamChatCompletionsImage : false,
-        streamPartialImages: profile.provider === 'openai' ? normalizeStreamPartialImages(profile.streamPartialImages) : DEFAULT_STREAM_PARTIAL_IMAGES,
-      }
-    })
-    const fallbackProfile = createDefaultOpenAIProfile({ id: newId('openai') })
-    const normalizedDraft = normalizeSettings({
+    const withStreamFlag = {
       ...nextDraft,
-      profiles: normalizedProfiles.length ? normalizedProfiles : [fallbackProfile],
-      activeProfileId: normalizedProfiles.some((profile) => profile.id === nextDraft.activeProfileId)
-        ? nextDraft.activeProfileId
-        : (normalizedProfiles[0]?.id ?? fallbackProfile.id),
-    })
-    setDraft(normalizedDraft)
-    setSettings(normalizedDraft)
+      profiles: nextDraft.profiles.map((profile) => ({
+        ...profile,
+        streamChatCompletionsImage: profile.provider === 'openai' ? profile.streamChatCompletionsImage : false,
+      })),
+    }
+    setSettings(prepareSettingsForCommit(withStreamFlag))
+    draftSourceRef.current = useStore.getState().settings
+    setDraft(draftSourceRef.current)
   }
 
   const setZipDownloadRouteEnabled = (route: ZipDownloadRoute, enabled: boolean) => {
@@ -743,7 +764,8 @@ export default function SettingsModal() {
   }
 
   const createProfileImportUrl = (profile: ApiProfile, options: ProfileImportUrlOptions) => {
-    const url = new URL(window.location.href)
+    const pageUrl = getProfileImportBaseUrl(isTauri, window.location.href)
+    const url = new URL(pageUrl)
     url.search = ''
     url.hash = ''
 
@@ -776,7 +798,7 @@ export default function SettingsModal() {
     }
 
     return createCustomProfileImportUrl(
-      window.location.href,
+      pageUrl,
       profile,
       draft.customProviders.find((item) => item.id === profile.provider),
       options,
@@ -785,8 +807,12 @@ export default function SettingsModal() {
 
   const copyProfileImportUrl = async (profile: ApiProfile, options: ProfileImportUrlOptions) => {
     try {
-      await copyTextToClipboard(createProfileImportUrl(profile, options))
-      showToast(options.includeApiKey ? t('settings.api.copySuccessWithKey') : t('settings.api.copySuccess'), 'success')
+      const url = createProfileImportUrl(profile, options)
+      await copyTextToClipboard(url)
+      // 客户端切回窗口时会检查剪贴板，本机刚复制的链接不再提示导入
+      handledImportLinks.add(url)
+      const message = options.includeApiKey ? t('settings.api.copySuccessWithKey') : t('settings.api.copySuccess')
+      showToast(isTauri ? `${message}，在其他设备的客户端中复制此链接后切回客户端即可导入` : message, 'success')
       setCopyImportUrlProfile(null)
     } catch (err) {
       showToast(getClipboardFailureMessage(t('settings.api.copyFailure'), err), 'error')
@@ -825,6 +851,10 @@ export default function SettingsModal() {
     }
     if (showZipDownloadRouteManager) {
       setShowZipDownloadRouteManager(false)
+      return
+    }
+    if (showFontLicenses) {
+      setShowFontLicenses(false)
       return
     }
     const nextTimeout = Number(timeoutInput)
@@ -868,11 +898,11 @@ export default function SettingsModal() {
 
   const showNotificationPermissionMessage = (result: Exclude<BrowserNotificationPermissionResult, { ok: true }>) => {
     if (result.reason === 'unsupported') {
-      showToast(i18n.t("upstreamSync.thisBrowserDoesNotSupportSystemNotifications"), 'error')
+      showToast(isTauri ? '当前环境不支持系统通知' : i18n.t("upstreamSync.thisBrowserDoesNotSupportSystemNotifications"), 'error')
     } else if (result.reason === 'insecure') {
       showToast(i18n.t("upstreamSync.notificationsRequireHttpsOrLocalhost"), 'error')
     } else if (result.reason === 'denied') {
-      showToast(i18n.t("upstreamSync.notificationsWereDeniedEnableThemInTheSite"), 'error')
+      showToast(isTauri ? '通知权限已被拒绝，请在 Windows 设置的「通知」中允许本应用发送通知' : i18n.t("upstreamSync.notificationsWereDeniedEnableThemInTheSite"), 'error')
     } else {
       showToast(i18n.t("upstreamSync.systemNotificationsAreOff"), 'info')
     }
@@ -893,7 +923,6 @@ export default function SettingsModal() {
     }
   }
 
-  const dataTransferMode = isExportingData ? 'export' : isImportingData ? 'import' : null
   const showDataTransferBusyToast = () => {
     const now = Date.now()
     if (now - dataTransferToastAtRef.current < 1000) return
@@ -928,7 +957,9 @@ export default function SettingsModal() {
   }
 
   useCloseOnEscape(showSettings && !dataTransferMode, handleClose)
-  usePreventBackgroundScroll(showSettings, showZipDownloadRouteManager ? zipDownloadRouteScrollBoundaryRef : showCustomProviderImport ? customProviderScrollBoundaryRef : settingsScrollBoundaryRef)
+  // 从“关于”打开的更新弹窗叠在设置之上，需要放行它的滚动
+  const updateModalOpen = useReleaseUpdates((s) => s.modalOpen)
+  usePreventBackgroundScroll(showSettings, updateModalOpen ? updateModalScrollRef : showZipDownloadRouteManager ? zipDownloadRouteScrollBoundaryRef : showFontLicenses ? fontLicensesScrollBoundaryRef : showCustomProviderImport ? customProviderScrollBoundaryRef : settingsScrollBoundaryRef)
 
   if (!showSettings) return null
 
@@ -937,11 +968,11 @@ export default function SettingsModal() {
       showToast(i18n.t("upstreamSync.finishOrStopRunningTasksBeforeExporting"), 'error')
       return
     }
-    setIsExportingData(true)
+    useSettingsDataTransfer.setState({ mode: 'export' })
     try {
-      await exportData({ exportConfig, exportTasks })
+      await trackDataTransfer(() => exportData({ exportConfig, exportTasks }))
     } finally {
-      setIsExportingData(false)
+      useSettingsDataTransfer.setState({ mode: null })
     }
   }
 
@@ -953,9 +984,9 @@ export default function SettingsModal() {
         e.target.value = ''
         return
       }
-      setIsImportingData(true)
+      useSettingsDataTransfer.setState({ mode: 'import' })
       try {
-        const imported = await importData(files, { importConfig: presetConfigOnly ? false : importConfig, importTasks })
+        const imported = await trackDataTransfer(() => importData(files, { importConfig: presetConfigOnly ? false : importConfig, importTasks }))
         if (imported) {
           const nextDraft = normalizeSettings(useStore.getState().settings)
           setDraft(nextDraft)
@@ -963,14 +994,14 @@ export default function SettingsModal() {
           setShowProfileMenu(false)
         }
       } finally {
-        setIsImportingData(false)
+        useSettingsDataTransfer.setState({ mode: null })
       }
     }
     e.target.value = ''
   }
 
   const handleClearAllData = async () => {
-    await clearData({ clearConfig, clearTasks })
+    await trackDataTransfer(() => clearData({ clearConfig, clearTasks }))
     const nextDraft = normalizeSettings(useStore.getState().settings)
     setDraft(nextDraft)
     setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
@@ -1176,17 +1207,10 @@ export default function SettingsModal() {
   }
 
   const deleteProfile = (id: string) => {
-    const preset = presetProfileIds.has(id)
-    if (presetConfigOnly || draft.profiles.length <= 1 || (preset && presetDeletionPrevented) || (!preset && id === defaultProfileId)) return
+    if (getApiProfileDeleteBlock(draft, id)) return
     if (id === reusedTaskApiProfileId) setReusedTaskApiProfile(null)
-    if (preset) dismissPresetProfile(id)
-    const nextProfiles = draft.profiles.filter((item) => item.id !== id)
-    const nextDraft = normalizeSettings({
-      ...draft,
-      profiles: nextProfiles,
-      activeProfileId: draft.activeProfileId === id ? nextProfiles[0].id : draft.activeProfileId,
-    })
-    commitSettings(nextDraft)
+    if (presetProfileIds.has(id)) dismissPresetProfile(id)
+    commitSettings(removeApiProfile(draft, id))
   }
 
   const handleProviderTypeChange = (value: string | number) => {
@@ -1209,25 +1233,8 @@ export default function SettingsModal() {
     setEditingCustomProviderId(null)
   }
 
-  const buildCustomProviderFromJson = () => {
-    const input = JSON.parse(customProviderJson)
-    const usedIds = new Set(
-      draft.customProviders
-        .filter((item) => item.id !== editingCustomProviderId)
-        .map((item) => item.id),
-    )
-    const provider = normalizeCustomProviderDefinition(
-      editingCustomProviderId && input && typeof input === 'object'
-        ? {
-            ...input,
-            id: editingCustomProviderId,
-          }
-        : input,
-      usedIds,
-    )
-    if (!provider) throw new Error(i18n.t("upstreamSync.invalidCustomProviderConfiguration"))
-    return provider
-  }
+  const buildCustomProviderFromJson = () =>
+    buildCustomProvider(JSON.parse(customProviderJson), draft.customProviders, editingCustomProviderId)
 
   function openEditCustomProvider(provider: CustomProviderDefinition) {
     if (presetConfigOnly || isPresetProviderLocked(provider.id)) return
@@ -1237,6 +1244,7 @@ export default function SettingsModal() {
       submit: provider.submit,
       editSubmit: provider.editSubmit,
       poll: provider.poll,
+      modelOverrides: provider.modelOverrides,
     }, null, 2))
     setShowCustomProviderImport(true)
     setCustomProviderImportError(null)
@@ -1287,17 +1295,9 @@ export default function SettingsModal() {
   }
 
   function deleteCustomProvider(provider: CustomProviderDefinition) {
-    if (presetConfigOnly || isPresetProviderDeletionPrevented(provider.id, draft.profiles)) return
-    const providerId = provider.id
-    if (isPresetProvider(providerId)) dismissPresetProvider(providerId)
-    const nextDraft = normalizeSettings({
-      ...draft,
-      customProviders: draft.customProviders.filter((provider) => provider.id !== providerId),
-      profiles: draft.profiles.map((profile) =>
-        profile.provider === providerId ? switchApiProfileProvider(profile, 'openai') : profile,
-      ),
-    })
-    commitSettings(nextDraft)
+    if (getCustomProviderDeleteBlock(draft, provider.id)) return
+    if (isPresetProvider(provider.id)) dismissPresetProvider(provider.id)
+    commitSettings(removeCustomProvider(draft, provider.id))
     showToast(i18n.t("upstreamSync.providerDeleted"), 'success')
   }
 
@@ -1313,7 +1313,8 @@ export default function SettingsModal() {
   const handleCustomProviderJsonPaste = async () => {
     setIsImportingJson(true)
     try {
-      const text = await navigator.clipboard.readText()
+      // 客户端中 navigator.clipboard.readText 会弹出 WebView2 的剪贴板权限框，改由插件读取；剪贴板为空或不是文本时插件抛英文错误，按空处理
+      const text = isTauri ? await readText().catch(() => '') : await navigator.clipboard.readText()
       if (!text.trim()) {
         throw new Error(i18n.t("upstreamSync.clipboardIsEmpty"))
       }
@@ -1428,6 +1429,15 @@ export default function SettingsModal() {
                 {t('settings.tabs.general')}
               </button>
               <button
+                onClick={() => setActiveTab('appearance')}
+                className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'appearance' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-[#7d6cb0] dark:text-[#c4b8e0] font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+                </svg>
+                外观配置
+              </button>
+              <button
                 onClick={() => setActiveTab('agent')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-2xl transition-colors ${activeTab === 'agent' ? 'bg-white/75 dark:bg-white/[0.08] shadow-sm text-[#7d6cb0] dark:text-[#c4b8e0] font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-white/45 dark:hover:bg-white/[0.04]'}`}
               >
@@ -1438,6 +1448,15 @@ export default function SettingsModal() {
                 </svg>
                 {t('settings.tabs.agent')}
               </button>
+              {isTauri && (
+                <button
+                  onClick={() => setActiveTab('skill')}
+                  className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-xl transition-colors ${activeTab === 'skill' ? 'bg-white dark:bg-white/[0.08] shadow-sm text-[#7d6cb0] dark:text-[#c4b8e0] font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100/80 dark:hover:bg-white/[0.04]'}`}
+                >
+                  <SparklesIcon className="w-4 h-4" />
+                  Skill
+                </button>
+              )}
               <button
                 onClick={() => setActiveTab('data')}
                 className={`whitespace-nowrap flex-shrink-0 flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-2xl transition-colors ${activeTab === 'data' ? 'bg-white/75 dark:bg-white/[0.08] shadow-sm text-[#7d6cb0] dark:text-[#c4b8e0] font-medium' : 'text-gray-600 dark:text-gray-400 hover:bg-white/45 dark:hover:bg-white/[0.04]'}`}
@@ -1461,7 +1480,11 @@ export default function SettingsModal() {
 
           {/* Content */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-transparent relative overflow-hidden">
-            <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-5 sm:p-6">
+            <div
+              ref={tabScrollRef}
+              onScroll={(e) => { tabScrollTopsRef.current[activeTab] = e.currentTarget.scrollTop }}
+              className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-5 [scrollbar-gutter:stable_both-edges] sm:p-6"
+            >
             {activeTab === 'general' && (
               <GeneralSettingsTab
                 draft={draft}
@@ -1471,6 +1494,8 @@ export default function SettingsModal() {
                 toggleTaskCompletionNotification={toggleTaskCompletionNotification}
               />
             )}
+
+            {activeTab === 'appearance' && <AppearanceSettingsTab draft={draft} commitSettings={commitSettings} />}
 
             {activeTab === 'agent' && (
               <AgentSettingsTab
@@ -1555,13 +1580,13 @@ export default function SettingsModal() {
                         setShowProfileMenu(!showProfileMenu)
                       }}
                       disabled={profileMenuDisabled}
-                      className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 ${profileMenuDisabled ? 'cursor-not-allowed opacity-70' : 'hover:bg-gray-50 dark:hover:bg-white/[0.06]'}`}
+                      className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-xl border border-transparent bg-black/[0.04] px-3 py-2 text-sm text-gray-700 outline-none transition dark:bg-white/[0.06] dark:text-gray-200 ${profileMenuDisabled ? 'cursor-not-allowed opacity-70' : 'hover:bg-gray-50 dark:hover:bg-white/[0.1]'}`}
                       title={activeProfile.name}
                     >
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="min-w-0 truncate">{activeProfile.name}</span>
                         <span className="shrink-0 rounded bg-[#f1edf8] px-1.5 py-0.5 text-[10px] font-medium text-[#7d6cb0] dark:bg-[#9181bd]/10 dark:text-[#c4b8e0]">
-                          {'Sakrylle'}
+                          {activeProfile.provider === 'openai' ? 'Sakrylle' : getApiProviderLabel(draft, activeProfile.provider)}
                         </span>
                       </span>
                       <ChevronDownIcon className={`w-3.5 h-3.5 flex-shrink-0 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${showProfileMenu ? 'rotate-180' : ''}`} />
@@ -1569,10 +1594,8 @@ export default function SettingsModal() {
                     
                     {showProfileMenu && !profileMenuDisabled && (
                       <>
-                        <div
-                          className="absolute right-0 top-full z-50 mt-1.5 w-full overflow-hidden overflow-y-auto rounded-xl border border-gray-200/60 bg-white/95 p-1 shadow-[0_8px_30px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl animate-dropdown-down dark:border-white/[0.08] dark:bg-gray-900/95 dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] dark:ring-white/10 custom-scrollbar"
-                          style={{ maxHeight: profileMenuMaxHeight }}
-                        >
+                        <div className={`absolute right-0 top-full z-50 mt-1.5 w-full animate-dropdown-down ${DROPDOWN_PANEL_CLASS}`} style={{ maxHeight: profileMenuMaxHeight }}>
+                          <div className={DROPDOWN_SCROLL_CLASS}>
                           {!presetConfigOnly && <button
                             type="button"
                             onClick={(e) => {
@@ -1631,7 +1654,7 @@ export default function SettingsModal() {
                                   )}
                                   <span className="min-w-0 truncate">{profile.name}</span>
                                   <span className={`rounded px-1.5 py-0.5 text-[10px] shrink-0 ${profile.id === activeProfile.id ? 'bg-[#e4d9f5] text-[#5b4d8e] dark:bg-[#9181bd]/20 dark:text-[#c4b8e0]' : 'bg-gray-100 text-gray-500 dark:bg-white/[0.08] dark:text-gray-400'}`}>
-                                    {'Sakrylle'}
+                                    {profile.provider === 'openai' ? 'Sakrylle' : getApiProviderLabel(draft, profile.provider)}
                                   </span>
                                 </div>
                                 
@@ -1673,6 +1696,7 @@ export default function SettingsModal() {
                               </div>
                               )
                             })}
+                          </div>
                           </div>
                         </div>
                       </>
@@ -1726,12 +1750,16 @@ export default function SettingsModal() {
                     onBlur={(e) => commitActiveProfilePatch({ baseUrl: e.target.value })}
                     type="text"
                     disabled={apiProxyEnabled || activeProfileLocked}
-                    placeholder={DEFAULT_SETTINGS.baseUrl}
+                    placeholder={nativeImageProvider?.baseUrl ?? (activeProfile.provider === 'fal' ? DEFAULT_FAL_BASE_URL : DEFAULT_SETTINGS.baseUrl)}
                     className={`w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#b9a9da] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-[#9181bd]/50 ${apiProxyEnabled ? 'opacity-50 cursor-not-allowed' : ''}`}
                   />
-                  <div data-selectable-text className="mt-1.5 min-h-[22px] flex items-center text-xs text-gray-500 dark:text-gray-500">
+                  <div data-selectable-text className="mt-1.5 min-h-[22px] flex items-center text-xs leading-6 text-gray-500 dark:text-gray-500">
                     {apiProxyEnabled ? (
                       <span className="text-yellow-600 dark:text-yellow-500">{i18n.t("settingsApiUrlExtras.proxyEnabledNote")}</span>
+                    ) : activeProfile.provider === 'fal' ? (
+                      <span>默认使用 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">{DEFAULT_FAL_BASE_URL}</code>；填写自定义地址时将作为 fal.ai 代理 URL。</span>
+                    ) : activeProfile.provider === 'google' ? (
+                      <span>末尾带 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">/</code> 时直接使用该地址拼接接口，不补 <code className="bg-gray-100 dark:bg-white/[0.06] px-1 py-0.5 rounded">/v1beta</code> 前缀；可通过配置分享链接导入。</span>
                     ) : (
                       <span>{t('settings.api.baseUrlHelp')}</span>
                     )}
@@ -1802,8 +1830,8 @@ export default function SettingsModal() {
                     onChange={(e) => updateActiveProfile({ apiKey: e.target.value })}
                     onBlur={(e) => commitActiveProfilePatch({ apiKey: e.target.value })}
                     type={showApiKey ? 'text' : 'password'}
-                    placeholder="sk-..."
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 pr-10 text-sm text-gray-700 outline-none transition focus:border-[#b9a9da] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-[#9181bd]/50"
+                    placeholder={activeProfile.provider === 'google' ? 'AIza...' : activeProfile.provider === 'xai' ? 'xai-...' : activeProfile.provider === 'fal' ? 'FAL_KEY' : 'sk-...'}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#b9a9da] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-[#9181bd]/50"
                   />
                   <button
                     type="button"
@@ -1834,75 +1862,110 @@ export default function SettingsModal() {
                 </div>
               </div>
 
-              {/* 7. 模型 ID（Images API） */}
-              <section className="glass-card rounded-2xl p-4 space-y-4">
-                <h4 className="text-sm font-medium text-[#7e6aa9] dark:text-[#c4b8e0]">{t('settings.api.galleryModels')}</h4>
-                {activeProfile.provider === 'openai' && sakrylleLoggedIn && (
-                  <GroupSelector mode="images" label={t('settings.api.imagesGroup')} hint={t('settings.api.imagesGroupHint')} onGroupChange={() => setModelRefreshKey(k => k + 1)} />
-                )}
-              <label className="block">
-                <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
-                  {t('settings.api.modelIdImages')}
-                </span>
-                <ModelSelector
-                  key={`img-${modelRefreshKey}`}
-                  value={activeProfile.model}
-                  onChange={(v) => { updateActiveProfile({ model: v }); commitActiveProfilePatch({ model: v }) }}
-                  filterImage={true}
-                  placeholder={DEFAULT_IMAGES_MODEL}
-                  mode="images"
-                />
-                <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                  {t('settings.api.modelHintImages', { model: DEFAULT_IMAGES_MODEL })}
-                </div>
-              </label>
-              </section>
-
-              {/* 7.5. 模型 ID（Responses API） */}
               {activeProfile.provider === 'openai' && (
-              <section className="glass-card rounded-2xl p-4 space-y-4">
-                <h4 className="text-sm font-medium text-[#7e6aa9] dark:text-[#c4b8e0]">{t('settings.api.agentModels')}</h4>
-                {sakrylleLoggedIn && (
-                  <GroupSelector mode="responses" label={t('settings.api.responsesGroup')} hint={t('settings.api.responsesGroupHint')} onGroupChange={() => setModelRefreshKey(k => k + 1)} />
-                )}
-              <label className="block">
-                <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
-                  {t('settings.api.modelIdResponses')}
-                </span>
-                <ModelSelector
-                  key={`resp-${modelRefreshKey}`}
-                  value={activeProfile.responsesModel ?? ''}
-                  onChange={(v) => { updateActiveProfile({ responsesModel: v }); commitActiveProfilePatch({ responsesModel: v }) }}
-                  filterImage={false}
-                  placeholder={DEFAULT_RESPONSES_MODEL}
-                  mode="responses"
-                />
-                <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                  {t('settings.api.modelHintResponses', { model: DEFAULT_RESPONSES_MODEL })}
-                </div>
-              </label>
-                <details className="border-t border-[#9181bd]/15 pt-3">
-                  <summary className="cursor-pointer text-xs font-medium text-gray-500 dark:text-gray-400 select-none">{t('settings.api.agentImageAdvanced')}</summary>
-                <label className="mt-4 block">
-                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">{t('settings.api.agentToolModel')}</span>
-                  <input
-                    value={activeProfile.imageGenerationModel ?? ''}
-                    onChange={(e) => updateActiveProfile({ imageGenerationModel: e.target.value })}
-                    onBlur={(e) => commitActiveProfilePatch({ imageGenerationModel: e.target.value })}
-                    type="text"
+                <div className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">{t('settings.api.apiMode')}</span>
+                  <Select
+                    value={activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode}
+                    onChange={(value) => {
+                      const apiMode = value as AppSettings['apiMode']
+                      updateActiveProfile({ apiMode }, true)
+                    }}
+                    options={[
+                      { label: 'Images API (/v1/images)', value: 'images' },
+                      { label: 'Responses API (/v1/responses)', value: 'responses' },
+                    ]}
                     disabled={activeProfileLocked}
-                    placeholder={DEFAULT_IMAGES_MODEL}
                     className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#b9a9da] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-[#9181bd]/50"
                   />
-                  <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                    {t('settings.api.agentToolModelHelp')}
+                  <div data-selectable-text className="mt-1.5 text-xs leading-6 text-gray-500 dark:text-gray-500">
+                    Images API 直接请求图像模型；Responses API 由文本模型调用图像生成工具。支持通过链接参数导入：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?apiMode=images</code> 或 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?apiMode=responses</code>。
+                  </div>
+                </div>
+              )}
+
+              {activeProfile.provider === 'openai' ? (
+                <section className="glass-card rounded-2xl p-4 space-y-4">
+                  <h4 className="text-sm font-medium text-[#7e6aa9] dark:text-[#c4b8e0]">{t('settings.api.galleryModels')}</h4>
+                  {sakrylleLoggedIn && (
+                    <GroupSelector mode="images" label={t('settings.api.imagesGroup')} hint={t('settings.api.imagesGroupHint')} onGroupChange={() => setModelRefreshKey(k => k + 1)} />
+                  )}
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
+                      {t('settings.api.modelIdImages')}
+                    </span>
+                    <ModelSelector
+                      key={`img-${modelRefreshKey}`}
+                      value={activeProfile.model}
+                      onChange={(v) => { updateActiveProfile({ model: v }); commitActiveProfilePatch({ model: v }) }}
+                      filterImage={true}
+                      placeholder={DEFAULT_IMAGES_MODEL}
+                      mode="images"
+                    />
+                    <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
+                      {t('settings.api.modelHintImages', { model: DEFAULT_IMAGES_MODEL })}
+                    </div>
+                  </label>
+                </section>
+              ) : (
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">模型 ID</span>
+                  <input
+                    value={activeProfile.model}
+                    onChange={(e) => updateActiveProfile({ model: e.target.value })}
+                    onBlur={(e) => commitActiveProfilePatch({ model: e.target.value })}
+                    type="text"
+                    disabled={activeProfileLocked}
+                    placeholder={nativeImageProvider?.model ?? (activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode))}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#b9a9da] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-[#9181bd]/50"
+                  />
+                  <div data-selectable-text className="mt-1.5 text-xs leading-6 text-gray-500 dark:text-gray-500">
+                    {activeProfile.provider === 'fal' ? (
+                      <>
+                        当前支持：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">openai/gpt-image-2</code>{' '}
+                        <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">openai/gpt-image-2.5/sunburst</code>{' '}
+                        <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">openai/gpt-image-2.5/flare</code>{' '}
+                        <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">openai/gpt-image-2.6/sunburst</code>{' '}
+                        <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">openai/gpt-image-2.6/flare</code>。
+                      </>
+                    ) : nativeImageProvider ? (
+                      <>图像模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{nativeImageProvider.model}</code>。</>
+                    ) : activeCustomProvider ? (
+                      <>当前使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{activeCustomProvider.name}</code>。</>
+                    ) : (
+                      <>支持 GPT Image、Gemini 和 Grok 图像模型，参数随模型切换。</>
+                    )}
+                    多个模型以逗号分隔，可在首页的模型参数中切换。
                   </div>
                 </label>
-                </details>
-              </section>
               )}
 
               {activeProfile.provider === 'openai' && (
+                <section className="glass-card rounded-2xl p-4 space-y-4">
+                  <h4 className="text-sm font-medium text-[#7e6aa9] dark:text-[#c4b8e0]">{t('settings.api.agentModels')}</h4>
+                  {sakrylleLoggedIn && (
+                    <GroupSelector mode="responses" label={t('settings.api.responsesGroup')} hint={t('settings.api.responsesGroupHint')} onGroupChange={() => setModelRefreshKey(k => k + 1)} />
+                  )}
+                  <label className="block">
+                    <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
+                      {t('settings.api.modelIdResponses')}
+                    </span>
+                    <ModelSelector
+                      key={`resp-${modelRefreshKey}`}
+                      value={activeProfile.responsesModel ?? ''}
+                      onChange={(v) => { updateActiveProfile({ responsesModel: v }); commitActiveProfilePatch({ responsesModel: v }) }}
+                      filterImage={false}
+                      placeholder={DEFAULT_RESPONSES_MODEL}
+                      mode="responses"
+                    />
+                    <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
+                      {t('settings.api.modelHintResponses', { model: DEFAULT_RESPONSES_MODEL })}
+                    </div>
+                  </label>
+                </section>
+              )}
+
+              {isResponsesProfile && (
                 <div className="block">
                   <div className="mb-1.5 flex items-center justify-between gap-3">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("upstreamSync.reasoningEffort")}</span>
@@ -1919,14 +1982,50 @@ export default function SettingsModal() {
                       />
                     </div>
                   </div>
-                  <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                    {i18n.t("upstreamSync.controlsReasoningDepthHigherLevelsMayTakeLonger")}<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?reasoningEffort=high</code>。
+                  <div data-selectable-text className="mt-1.5 text-xs leading-6 text-gray-500 dark:text-gray-500">
+                    {i18n.t("upstreamSync.controlsReasoningDepthHigherLevelsMayTakeLonger")}调用图像生成工具时不支持 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">minimal</code>。支持通过链接参数导入：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?reasoningEffort=</code>。
                   </div>
                 </div>
               )}
 
+              {isResponsesProfile && (
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">图像模型 ID</span>
+                  <input
+                    value={activeProfile.imageGenerationModel ?? ''}
+                    onChange={(e) => updateActiveProfile({ imageGenerationModel: e.target.value })}
+                    onBlur={(e) => commitActiveProfilePatch({ imageGenerationModel: e.target.value })}
+                    type="text"
+                    disabled={activeProfileLocked}
+                    placeholder="留空使用接口默认值"
+                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#b9a9da] dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-[#9181bd]/50"
+                  />
+                  <div data-selectable-text className="mt-1.5 text-xs leading-6 text-gray-500 dark:text-gray-500">
+                    <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具实际出图的 GPT Image 模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_IMAGES_MODEL}</code>。支持通过链接参数导入：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?imageGenerationModel=</code>。
+                  </div>
+                </label>
+              )}
+
+              {showSvgModel && (
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">SVG 编写模型 ID</span>
+                  <input
+                    value={activeProfile.svgModel ?? ''}
+                    onChange={(e) => updateActiveProfile({ svgModel: e.target.value })}
+                    onBlur={(e) => commitActiveProfilePatch({ svgModel: e.target.value.trim() || undefined })}
+                    type="text"
+                    disabled={activeProfileLocked}
+                    placeholder={DEFAULT_SVG_MODEL}
+                    className="w-full rounded-xl border border-transparent bg-black/[0.04] px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-[#b9a9da] dark:bg-white/[0.06] dark:text-gray-200 dark:focus:border-[#9181bd]/50"
+                  />
+                  <div data-selectable-text className="mt-1.5 text-xs leading-6 text-gray-500 dark:text-gray-500">
+                    输出 SVG 时，图像模型先生成参考图，再由该文本模型编写 SVG，其 token 用量另行计费。留空时使用 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_SVG_MODEL}</code>。
+                  </div>
+                </label>
+              )}
+
               {/* 8. 流式传输 + 中间步骤图像数 */}
-              {activeProfile.provider === 'openai' && (
+              {activeProfile.provider === 'openai' && !activeImageFamily && (
                 <div className="block space-y-3">
                   <div>
                     <div className="mb-1.5 flex items-center justify-between gap-3">
@@ -1983,6 +2082,9 @@ export default function SettingsModal() {
                         />
                       </div>
                     </div>
+                    <div data-selectable-text className="text-xs leading-6 text-gray-500 dark:text-gray-500">
+                      {i18n.t("settings.api.streamPartialImagesHint")}
+                    </div>
                   </div>
                 </div>
               )}
@@ -2017,7 +2119,7 @@ export default function SettingsModal() {
                   <span className="block text-sm text-gray-600 dark:text-gray-300">{i18n.t("upstreamSync.transparentBackgroundMethod")}</span>
                   <div className="w-28 shrink-0">
                     <Select
-                      value={activeProfile.transparentBackgroundMethod}
+                      value={resolvedActiveProfile.transparentBackgroundMethod}
                       onChange={(value) => updateActiveProfile({ transparentBackgroundMethod: value as ApiProfile['transparentBackgroundMethod'] }, true)}
                       options={[
                         { label: i18n.t("upstreamSync.nativeApi"), value: 'api' },
@@ -2028,15 +2130,19 @@ export default function SettingsModal() {
                     />
                   </div>
                 </div>
-                <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                <div data-selectable-text className="text-xs leading-6 text-gray-500 dark:text-gray-500">
                   {activeCustomProviderSupportsNativeTransparentBackground
-                    ? i18n.t("upstreamSync.nativeApiRequestsATransparentImageDirectlyAnd")
-                    : <>{i18n.t("upstreamSync.thisCustomProviderManifestDoesNotMap")} <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">$params.background</code>{i18n.t("upstreamSync.soNativeTransparentBackgroundsAreUnavailable")}</>}
+                    ? (isTauri
+                      ? 'API 原生会请求接口直接生成透明背景，需当前接口支持；本地后处理会生成纯色背景并在本地去除。'
+                      : i18n.t("upstreamSync.nativeApiRequestsATransparentImageDirectlyAnd"))
+                    : activeImageFamily
+                      ? '当前图像模型使用本地后处理生成透明背景。'
+                      : <>{i18n.t("upstreamSync.thisCustomProviderManifestDoesNotMap")} <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">$params.background</code>{i18n.t("upstreamSync.soNativeTransparentBackgroundsAreUnavailable")}</>}
                 </div>
               </div>
 
               {/* 10. 返回 Base64 图片数据 */}
-              {activeProviderIsOpenAICompatible && (
+              {(activeProviderIsOpenAICompatible || activeProfile.provider === 'xai') && (
                 <div className="block">
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">{t('settings.api.responseFormatB64')}</span>
@@ -2059,7 +2165,7 @@ export default function SettingsModal() {
               )}
 
               {/* 11. Codex CLI 兼容模式 */}
-              {activeProviderIsOpenAICompatible && (
+              {activeProviderIsOpenAICompatible && !activeImageFamily && (
                 <div className="block">
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">{t('settings.api.codexCli')}</span>
@@ -2082,7 +2188,7 @@ export default function SettingsModal() {
               )}
 
               {/* 12. 请求超时 */}
-              {activeProviderIsOpenAICompatible && (
+              {(activeProviderIsOpenAICompatible || nativeImageProvider) && (
                 <label className="block">
                   <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">{t('settings.api.timeout')}</span>
                   <input
@@ -2107,16 +2213,20 @@ export default function SettingsModal() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                   </svg>
                   <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
-                    {t('settings.data.notice')}
+                    {isTauri
+                      ? '所有的配置、任务和生成的图片均仅保存在本机的数据目录中（除非您使用的服务商存储了它们）。如果您需要更换安装位置或使用其他设备，请先导出备份。'
+                      : t('settings.data.notice')}
                   </div>
                 </div>
+
+                {isTauri && <StorageInfoSection />}
 
                 <div className="rounded-2xl border border-white/35 bg-white/30 p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
                   <div className="flex items-center gap-2 mb-1">
                     <ExportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
                     <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">{t('settings.data.exportTitle')}</h4>
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">{i18n.t("upstreamSync.largeBackupsAreSplitAutomaticallyAllowYourBrowser")}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{isTauri ? `受文件大小限制，过大的备份将自动分卷，${draft.saveLocationMode === 'default' ? '全部分卷保存到默认保存地址' : '导出时选择一个文件夹保存全部分卷'}` : '受浏览器文件大小限制，过大的备份将自动分卷导出，请允许浏览器下载多个文件'}</p>
                   <div className="flex flex-wrap gap-x-6 gap-y-3">
                     <Checkbox
                       checked={exportConfig}
@@ -2153,7 +2263,7 @@ export default function SettingsModal() {
                     <ImportIcon className="w-4 h-4 text-gray-700 dark:text-gray-300" />
                     <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">{t('settings.data.importTitle')}</h4>
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">{i18n.t("upstreamSync.importMultipleRegularBackupsTogetherOrSelectAll")}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">支持一次导入多个普通备份；分卷备份请一次性选中同一批次的全部分卷</p>
                   <div className="flex flex-wrap gap-x-6 gap-y-3">
                     {!presetConfigOnly && <Checkbox
                       checked={importConfig}
@@ -2193,7 +2303,7 @@ export default function SettingsModal() {
                   />
                 </div>
 
-                <div className="rounded-2xl border border-red-100/50 bg-red-50/30 p-4 dark:border-red-500/10 dark:bg-red-500/5 space-y-4 shadow-sm">
+                <div className="rounded-2xl bg-red-500/[0.06] p-4 dark:bg-red-500/[0.1] space-y-4">
                   <div className="flex items-center gap-2 mb-1">
                     <TrashIcon className="w-4 h-4 text-red-500/90 dark:text-red-400" />
                     <h4 className="text-sm font-bold text-red-500/90 dark:text-red-400">{t('settings.data.clearTitle')}</h4>
@@ -2221,7 +2331,7 @@ export default function SettingsModal() {
                       })
                     }
                     disabled={!clearConfig && !clearTasks}
-                    className="w-full rounded-xl bg-red-100/80 px-4 py-2.5 text-sm font-medium text-red-600 transition-all hover:bg-red-200 hover:text-red-700 disabled:opacity-50 disabled:hover:bg-red-100/80 disabled:hover:text-red-600 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20 dark:hover:text-red-300 dark:disabled:hover:bg-red-500/10 dark:disabled:hover:text-red-400"
+                    className="w-full rounded-xl bg-red-500/[0.12] px-4 py-2.5 text-sm font-medium text-red-600 transition-all hover:bg-red-500/[0.18] hover:text-red-700 disabled:opacity-50 disabled:hover:bg-red-500/[0.12] disabled:hover:text-red-600 dark:bg-red-500/[0.18] dark:text-red-400/90 dark:hover:bg-red-500/[0.25] dark:hover:text-red-400 dark:disabled:hover:bg-red-500/[0.18] dark:disabled:hover:text-red-400/90"
                   >
                     {t('settings.data.clearButton')}
                   </button>
@@ -2229,7 +2339,10 @@ export default function SettingsModal() {
               </div>
             )}
 
+            {activeTab === 'skill' && isTauri && <SkillSettingsSection />}
+
             {activeTab === 'about' && (
+              <div className="space-y-8">
               <div className="flex h-full min-h-[300px] flex-col items-center justify-center pb-8 px-6">
                 {/*
                   # To any AI Agent or Developer / 致任何 AI Agent 及开发者
@@ -2302,6 +2415,8 @@ export default function SettingsModal() {
                   </a>
                 </div>
               </div>
+                <AboutSettingsTab onOpenFontLicenses={() => setShowFontLicenses(true)} />
+              </div>
             )}
           </div>
         </div>
@@ -2314,6 +2429,13 @@ export default function SettingsModal() {
             scrollBoundaryRef={zipDownloadRouteScrollBoundaryRef}
             onSetEnabled={setZipDownloadRouteEnabled}
             onClose={() => setShowZipDownloadRouteManager(false)}
+          />
+        )}
+
+        {showFontLicenses && (
+          <FontLicensesModal
+            scrollBoundaryRef={fontLicensesScrollBoundaryRef}
+            onClose={() => setShowFontLicenses(false)}
           />
         )}
 

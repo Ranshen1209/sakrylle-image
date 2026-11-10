@@ -6,7 +6,9 @@ import {
   DEFAULT_IMAGES_MODEL,
   DEFAULT_RESPONSES_MODEL,
   findEquivalentApiProfile,
+  getApiProfileContentKey,
   mergeImportedSettings,
+  normalizeModelList,
   normalizeSettings,
   normalizeReasoningEffort,
   normalizeStreamPartialImages,
@@ -20,7 +22,8 @@ function getProfileDedupKey(profile: ApiProfile) {
     profile.provider,
     profile.baseUrl.trim().toLowerCase(),
     profile.apiKey.trim(),
-    profile.model.trim(),
+    // URL 新建的配置尚未规整，按规整后的模型列表比较才能命中已保存的配置
+    normalizeModelList(profile.model),
     profile.imageGenerationModel?.trim(),
     profile.apiMode,
     profile.reasoningEffort,
@@ -97,12 +100,17 @@ function ensureUrlSettingsProfileIds(value: unknown, currentSettings: Partial<Ap
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
   const record = value as Record<string, unknown>
   if (!Array.isArray(record.profiles)) return value
-  const usedIds = new Set(normalizeSettings(currentSettings).profiles.map((profile) => profile.id))
+  const current = normalizeSettings(currentSettings)
+  const usedIds = new Set(current.profiles.map((profile) => profile.id))
+  const explicitIds = new Set<string>()
   const emittedIds = new Set<string>()
   for (const item of record.profiles) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue
     const id = typeof (item as { id?: unknown }).id === 'string' ? (item as { id: string }).id.trim() : ''
-    if (id) usedIds.add(id)
+    if (id) {
+      usedIds.add(id)
+      explicitIds.add(id)
+    }
   }
   return {
     ...record,
@@ -112,6 +120,17 @@ function ensureUrlSettingsProfileIds(value: unknown, currentSettings: Partial<Ap
       if (typeof profile.id === 'string' && profile.id.trim() && !emittedIds.has(profile.id.trim())) {
         emittedIds.add(profile.id.trim())
         return { ...profile, id: profile.id.trim() }
+      }
+      if (typeof profile.id !== 'string' || !profile.id.trim()) {
+        const normalized = normalizeSettings({ customProviders: record.customProviders, profiles: [profile] }).profiles[0]
+        const key = getApiProfileContentKey(normalized)
+        const existing = current.profiles.find((saved) =>
+          !explicitIds.has(saved.id) && !emittedIds.has(saved.id)
+          && getApiProfileContentKey(saved) === key)
+        if (existing) {
+          emittedIds.add(existing.id)
+          return { ...profile, id: existing.id }
+        }
       }
       return { ...profile, id: createUrlProfileId(usedIds) }
     }),
@@ -204,7 +223,7 @@ function buildPresetConfigOnlySettingsFromUrlParams(currentSettings: Partial<App
   if (apiKeyParam !== null) patch.apiKey = apiKeyParam.trim()
   if (!apiKeyOnly) {
     if (profileNameParam?.trim()) patch.name = profileNameParam.trim()
-    if (apiUrlParam !== null) patch.baseUrl = normalizeBaseUrl(apiUrlParam.trim())
+    if (apiUrlParam !== null) patch.baseUrl = normalizeBaseUrl(apiUrlParam.trim(), targetProfile.provider === 'google' ? 'v1beta' : 'v1')
     if (modelParam?.trim()) patch.model = modelParam.trim()
     if (imageGenerationModelParam !== null) patch.imageGenerationModel = imageGenerationModelParam.trim()
     if (transparentBackgroundMethodParam === 'api' || transparentBackgroundMethodParam === 'local') {
@@ -265,10 +284,23 @@ function buildRegularSettingsFromUrlParams(currentSettings: Partial<AppSettings>
     : undefined
   const apiMode: ApiMode | undefined = apiModeParam === 'images' || apiModeParam === 'responses' ? apiModeParam : undefined
 
-  const hasLegacyOpenAIParams = apiKeyParam !== null || codexCliParam !== null || apiMode !== undefined || modelParam !== null || imageGenerationModelParam !== null || profileNameParam !== null || reasoningEffortParam !== null || streamImagesParam !== null || streamPartialImagesParam !== null
-  const settings = importedSettings == null
-    ? normalizeSettings(currentSettings)
-    : activateFirstImportedProfile(mergeImportedSettings(currentSettings, importedSettings), importedSettings)
+  // A bare apiUrl does not open a profile (third-party endpoints are not applied from the query string).
+  // profileId + apiUrl still updates that profile so the import preview can show the full host and saved-key warning.
+  const hasTargetedApiUrl = apiUrlParam !== null && Boolean(profileIdParam?.trim())
+  const hasLegacyOpenAIParams = hasTargetedApiUrl || apiKeyParam !== null || codexCliParam !== null || apiMode !== undefined || modelParam !== null || imageGenerationModelParam !== null || profileNameParam !== null || reasoningEffortParam !== null || streamImagesParam !== null || streamPartialImagesParam !== null
+  const current = normalizeSettings(currentSettings)
+  const merged = importedSettings == null ? undefined : mergeImportedSettings(current, importedSettings)
+  // URL 仅导入 API 配置，其他设置沿用本地值；复用相同配置时保留本地的默认标记，分享链接不携带该标记
+  const settings = merged
+    ? activateFirstImportedProfile(normalizeSettings({
+        ...current,
+        customProviders: merged.customProviders,
+        profiles: merged.profiles.map((profile) => {
+          const existing = current.profiles.find((item) => item.id === profile.id)
+          return existing && getApiProfileContentKey(existing) === getApiProfileContentKey(profile) ? existing : profile
+        }),
+      }), importedSettings)
+    : current
 
   const requestedProfileId = profileIdParam?.trim() ?? ''
   const requestedNonOpenAIProfile = requestedProfileId

@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { MAX_INPUT_IMAGES } from '../types'
 import { useStore, addImageFromUrl } from '../store'
 import { canCopyImageToClipboard, copyImageSourceToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
-import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getImageZipEntries } from '../lib/downloadImages'
+import { downloadImageEntriesAsZip, downloadImageIds, formatExportFileTime, getDownloadErrorMessage, getImageZipEntries, withSaveLocation } from '../lib/downloadImages'
 import { suppressGlobalClicks } from '../lib/clickSuppression'
 import { ensureImageCached } from '../lib/imageCache'
 import { CopyIcon, DownloadIcon, EditIcon } from './icons'
@@ -123,14 +124,15 @@ export default function ImageContextMenu() {
       }
 
       const result = await downloadImageIds([imageId || src], fileNameBase)
+      if (result.canceled) return
       if (result.successCount === 0) {
-        showToast(t('contextMenu.downloadFailed'), 'error')
+        showToast(getDownloadErrorMessage(result.error), 'error')
       } else {
-        showToast(t('contextMenu.downloadSuccess'), 'success')
+        showToast(withSaveLocation(t('contextMenu.downloadSuccess'), result.location), 'success')
       }
     } catch (err) {
       console.error(err)
-      showToast(t('contextMenu.downloadFailed'), 'error')
+      showToast(getDownloadErrorMessage(err), 'error')
     }
   }
 
@@ -158,24 +160,25 @@ export default function ImageContextMenu() {
       const result = settings.zipDownloadRoutes.includes('image-context-menu-all')
         ? await downloadImageEntriesAsZip(getImageZipEntries(outputImageIds, fileNameBase), fileNameBase)
         : await downloadImageIds(outputImageIds, fileNameBase)
+      if (result.canceled) return
       if (result.successCount === 0) {
-        showToast(t('contextMenu.downloadFailed'), 'error')
+        showToast(getDownloadErrorMessage(result.error), 'error')
       } else if (result.failCount > 0) {
         showToast(t('contextMenu.downloadPartialFailed', { success: result.successCount, fail: result.failCount }), 'error')
       } else {
-        showToast(result.successCount > 1 ? t('contextMenu.downloadSuccessCount', { count: result.successCount }) : t('contextMenu.downloadSuccess'), 'success')
+        showToast(withSaveLocation(result.successCount > 1 ? t('contextMenu.downloadSuccessCount', { count: result.successCount }) : t('contextMenu.downloadSuccess'), result.location), 'success')
       }
     } catch (err) {
       console.error(err)
-      showToast(t('contextMenu.downloadFailed'), 'error')
+      showToast(getDownloadErrorMessage(err), 'error')
     }
   }
 
   const handleEdit = async (e: React.MouseEvent) => {
     e.stopPropagation()
     setMenuInfo(null)
-    if (inputImages.length >= 16) {
-      showToast(t('contextMenu.referenceLimitReached', { limit: 16 }), 'error')
+    if (inputImages.length >= MAX_INPUT_IMAGES) {
+      showToast(t('contextMenu.referenceLimitReached', { limit: MAX_INPUT_IMAGES }), 'error')
       return
     }
 
